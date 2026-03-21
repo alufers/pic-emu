@@ -51,11 +51,42 @@ fn asm2emu(asm_source: []const u8) !main.PIC18 {
 
 test "GOTO instruction" {
     var pic = try asm2emu(
-        \\      goto 38
+        \\      GOTO 38
         \\  END
     );
     defer pic.deinit();
     try pic.execInstruction();
 
     try std.testing.expectEqual(pic.PC, 38);
+
+    // Status Affected	None
+}
+
+
+test "MOVLW instruction" {
+    var pic = try asm2emu(
+        \\      MOVLW 0x42
+        \\  END
+    );
+    defer pic.deinit();
+    try pic.execInstruction();
+
+    try std.testing.expectEqual(0x42, pic.REGS.WREG.*);
+
+     // Status Affected	None
+}
+
+test "MOVWF instruction" {
+    var pic = try asm2emu(
+        \\      MOVLW 0x42
+        \\      MOVWF 0xdc, 0
+        \\  END
+    );
+    defer pic.deinit();
+    try pic.execInstruction();
+    try pic.execInstruction();
+
+    try std.testing.expectEqual(0x42, pic.MEM[0xfdc]);
+
+    // Status Affected	None
 }
