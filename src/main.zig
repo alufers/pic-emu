@@ -11,13 +11,13 @@ const readInt = std.mem.readInt;
 
 pub const PIC18 = struct {
     const StatusReg = packed struct {
-        C: u1,
-        DC: u1,
-        Z: u1,
-        OV: u1,
-        N: u1,
-        PD: u1,
-        TO: u1,
+        C: u1, // Carry
+        DC: u1, // Digit carry
+        Z: u1, // Zero
+        OV: u1, // Overflow
+        N: u1, // Negative
+        PD: u1, // Power down
+        TO: u1, // Timeout
         unused: u1,
     };
     const RegAddrs = struct {
@@ -215,10 +215,12 @@ pub const PIC18 = struct {
                         });
                         const val = try self.memRead(use_bsr, @intCast(instruction & 0x00FF));
                         if (dest_in_ram) {
-                            try self.check(false, "Z status not implemented yet", .{});
+                            try self.memWrite(use_bsr, @intCast(instruction & 0x00FF), val);
                         } else {
                             self.REGS.WREG.* = val;
                         }
+                        self.REGS.STATUS.*.Z = if (val == 0) 1 else 0;
+                        self.REGS.STATUS.*.N = if (val & 0x80 != 0) 1 else 0;
                     },
                     else => return error.InvalidInstruction,
                 }
@@ -226,6 +228,11 @@ pub const PIC18 = struct {
             0b0110 => {
                 const use_bsr = (nibble2 & 0b0001) == 1;
                 switch (nibble2 & 0b1110) {
+                    0b1010 => { // CLRF Clear register f
+                        std.debug.print("CLRF 0x{x}\n", .{instruction & 0x00FF});
+                        try self.memWrite(use_bsr, @intCast(instruction & 0x00FF), 0);
+                        self.REGS.STATUS.*.Z = 1;
+                    },
                     0b1110 => { // MOVWF Move W to f
                         std.debug.print("MOVWF 0x{x}\n", .{instruction & 0x00FF});
                         try self.memWrite(use_bsr, @intCast(instruction & 0x00FF), self.REGS.WREG.*);
@@ -246,7 +253,11 @@ pub const PIC18 = struct {
             0b1110 => {
                 switch (nibble2) {
                     0b0001 => { // BNZ - Branch if Not Zero
-
+                        const n: i8 = @bitCast(@as(u8, @intCast(instruction & 0x00FF)));
+                        if (self.REGS.STATUS.*.Z == 0) {
+                            self.PC = @intCast(@as(i32, @intCast(self.PC)) + 2 * @as(i32, n));
+                        }
+                        std.debug.print("BNZ n={} Z={} -> PC=0x{x}\n", .{ n, self.REGS.STATUS.*.Z, self.PC });
                     },
                     0b1110 => { // LFSR - Load FSR (File select register)
                         const FSR_num = (instruction & 0x00F0) >> 4;
