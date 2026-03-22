@@ -2,7 +2,8 @@ const std = @import("std");
 const ihex = @import("ihex.zig");
 
 test {
-    _ = @import("emu_test.zig");
+    _ = @import("instr_test.zig");
+    _ = @import("e2e_test.zig");
 }
 
 const readInt = std.mem.readInt;
@@ -56,6 +57,9 @@ pub const PIC18 = struct {
         POSTDEC2: *u8,
         PREINC2: *u8,
         PLUSW2: *u8,
+
+        /// Bank select register
+        BSR: *u8,
     };
 
     allocator: std.mem.Allocator,
@@ -93,12 +97,12 @@ pub const PIC18 = struct {
                 .TBLPTRU = &mem[0xFF8],
                 .TBLAT = &mem[0xFF5],
                 .WREG = &mem[0xFE8],
-                .FSR0L = &mem[0xFEA],
-                .FSR0H = &mem[0xFEB],
-                .FSR1L = &mem[0xFEC],
-                .FSR1H = &mem[0xFED],
-                .FSR2L = &mem[0xFEE],
-                .FSR2H = &mem[0xFEF],
+                .FSR0L = &mem[0xFE9],
+                .FSR0H = &mem[0xFEA],
+                .FSR1L = &mem[0xFE1],
+                .FSR1H = &mem[0xFE2],
+                .FSR2L = &mem[0xFD9],
+                .FSR2H = &mem[0xFDA],
                 .STATUS = @ptrCast(&mem[0xFD8]),
 
                 .INDF0 = &mem[0xFEF],
@@ -118,6 +122,8 @@ pub const PIC18 = struct {
                 .POSTDEC2 = &mem[0xFDD],
                 .PREINC2 = &mem[0xFDC],
                 .PLUSW2 = &mem[0xFDB],
+
+                .BSR = &mem[0xFE0],
             },
         };
         return pic;
@@ -157,7 +163,8 @@ pub const PIC18 = struct {
 
     fn accessBankFullAddr(self: *PIC18, use_bsr: bool, addr: u8) !u16 {
         if (use_bsr) {
-            try self.check(false, "NON ACCESS BANK WRITE NOT IMPLEMENTED", .{});
+            const bank: u16 = self.REGS.BSR.*;
+            return bank * 256 + addr;
         }
         // The Access Bank consists of the first 96 bytes of
         // memory (00h-5Fh) in Bank 0 and the last 160 bytes of
@@ -264,7 +271,7 @@ pub const PIC18 = struct {
         }
     }
 
-    fn getFSR(self: *PIC18, FSR_num: u8) !u16 {
+    pub fn getFSR(self: *PIC18, FSR_num: u8) !u16 {
         switch (FSR_num) {
             0 => {
                 return @as(u16, self.REGS.FSR0H.*) << 8 | @as(u16, self.REGS.FSR0L.*);
@@ -308,6 +315,9 @@ pub const PIC18 = struct {
                         self.REGS.TBLPTRU.* = @intCast((tblptr >> 16) & 0x0F);
                         self.REGS.TBLPTRH.* = @intCast((tblptr >> 8) & 0xFF);
                         self.REGS.TBLPTRL.* = @intCast(tblptr & 0xFF);
+                    },
+                    0b0001 => { // Move literal to BSR
+                        self.REGS.BSR.* = @intCast(instruction & 0x003F); // Load 6 bits only
                     },
                     0b0100, 0b0101, 0b0110, 0b0111 => { // DECF Decrement f
 
@@ -393,7 +403,10 @@ pub const PIC18 = struct {
 
                 std.debug.print("MOVFF src=0x{x} dst=0x{x}\n", .{ fs, fd });
 
-                self.MEM[fd] = self.MEM[fs]; // TODO: side effects?
+                // resolve indirect handles side effects on FSRs
+                const indirect_fs = try self.resolveIndirect(fs);
+                const indirect_fd = try self.resolveIndirect(fd);
+                self.MEM[indirect_fd] = self.MEM[indirect_fs];
             },
             0b1110 => {
                 switch (nibble2) {
@@ -410,7 +423,7 @@ pub const PIC18 = struct {
                         const second_word = self.consumeProgWord();
                         try self.check((second_word & 0xF000) >> 12 == 0b1111, "invalid LFSR", .{});
                         const val = (instruction & 0x000F) << 8 | (second_word & 0x0FFF);
-                        std.debug.print("LFSR: 0x{x}\n", .{val});
+                        std.debug.print("LFSR: num={} 0x{x}\n", .{ FSR_num, val });
                         try self.setFSR(FSR_num, val);
                     },
                     0b1111 => { // GOTO
@@ -442,7 +455,7 @@ pub fn main() !void {
     var gpa: std.heap.DebugAllocator(.{}) = .init;
     const allocator = gpa.allocator();
 
-    var file = try std.fs.cwd().openFile("../pilot.X.production.hex", .{ .mode = .read_only });
+    var file = try std.fs.cwd().openFile("./pilot.X.production.hex", .{ .mode = .read_only });
     defer file.close();
 
     var file_buffer: [1024]u8 = undefined;
@@ -451,7 +464,15 @@ pub fn main() !void {
     var pic = PIC18.init(allocator);
     try pic.loadRom(&rdr.interface);
 
-    for (0..15) |_| {
+    var cnt: u32 = 0;
+    for (0..9999) |_| {
+        if (pic.PC == 0x01b1ce) {
+            cnt += 1;
+            if (cnt == 1) {
+                // Print
+            }
+            std.debug.print("======PC hit 0x01b1ce! count={}\n", .{cnt});
+        }
         try pic.execInstruction();
     }
 }

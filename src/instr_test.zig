@@ -1,53 +1,8 @@
 const std = @import("std");
 const main = @import("main.zig");
+const test_utils = @import("test_utils.zig");
 
-fn asm2emu(asm_source: []const u8) !main.PIC18 {
-    var tmp_dir = std.testing.tmpDir(.{});
-
-    const prelude =
-        \\  RADIX DEC
-        \\  ERRORLEVEL  0, -302
-        \\  INCLUDE <p18f67k22.inc>
-        \\
-    ;
-
-    defer tmp_dir.cleanup();
-    {
-        const src_file = try tmp_dir.dir.createFile("a.asm", .{});
-        defer src_file.close();
-        try src_file.writeAll(prelude);
-        try src_file.writeAll(asm_source);
-    }
-
-    const result = try std.process.Child.run(.{
-        .allocator = std.testing.allocator,
-        .cwd_dir = tmp_dir.dir,
-        .argv = &.{ "gpasm", "-p", "18F67K22", "a.asm" },
-    });
-
-    defer std.testing.allocator.free(result.stderr);
-    defer std.testing.allocator.free(result.stdout);
-
-    switch (result.term) {
-        .Exited => |ret| {
-            if (ret != 0) {
-                std.debug.print("\n\n======= GPASM OUT =======\n {s}\n======= END GPASM OUT =======\n", .{result.stdout});
-            }
-            try std.testing.expectEqual(0, ret);
-        },
-        else => try std.testing.expect(false),
-    }
-
-    var pic = main.PIC18.init(std.testing.allocator);
-
-    // load compiled data
-    var hexfile = try tmp_dir.dir.openFile("a.hex", .{ .mode = .read_only });
-    defer hexfile.close();
-    var file_buffer: [1024]u8 = undefined;
-    var rdr = hexfile.reader(&file_buffer);
-    try pic.loadRom(&rdr.interface);
-    return pic;
-}
+const asm2emu = test_utils.asm2emu;
 
 test "GOTO instruction" {
     var pic = try asm2emu(
@@ -138,7 +93,7 @@ test "DECF instruction" {
     try std.testing.expectEqual(0, pic.REGS.STATUS.*.Z);
     try std.testing.expectEqual(0, pic.REGS.STATUS.*.N);
     try std.testing.expectEqual(0, pic.REGS.STATUS.*.OV);
-    try std.testing.expectEqual(1, pic.REGS.STATUS.*.C);  // no borrow
+    try std.testing.expectEqual(1, pic.REGS.STATUS.*.C); // no borrow
     try std.testing.expectEqual(1, pic.REGS.STATUS.*.DC); // no digit borrow
 
     // Case 2: d=0, 0x05 -> 0x04, result to W; f must stay 0x05
@@ -151,7 +106,7 @@ test "DECF instruction" {
     try std.testing.expectEqual(0x00, pic.MEM[0x12]);
     try std.testing.expectEqual(1, pic.REGS.STATUS.*.Z);
     try std.testing.expectEqual(0, pic.REGS.STATUS.*.N);
-    try std.testing.expectEqual(1, pic.REGS.STATUS.*.C);  // no borrow
+    try std.testing.expectEqual(1, pic.REGS.STATUS.*.C); // no borrow
     try std.testing.expectEqual(1, pic.REGS.STATUS.*.DC); // no digit borrow
 
     // Case 4: 0x00 -> 0xFF, unsigned borrow: C=0, N=1
@@ -160,7 +115,7 @@ test "DECF instruction" {
     try std.testing.expectEqual(0, pic.REGS.STATUS.*.Z);
     try std.testing.expectEqual(1, pic.REGS.STATUS.*.N);
     try std.testing.expectEqual(0, pic.REGS.STATUS.*.OV); // no signed overflow
-    try std.testing.expectEqual(0, pic.REGS.STATUS.*.C);  // borrow
+    try std.testing.expectEqual(0, pic.REGS.STATUS.*.C); // borrow
     try std.testing.expectEqual(0, pic.REGS.STATUS.*.DC); // digit borrow
 
     // Case 5: 0x80 -> 0x7F, signed overflow: OV=1, N=0, digit borrow: DC=0
@@ -168,7 +123,7 @@ test "DECF instruction" {
     try std.testing.expectEqual(0x7F, pic.MEM[0x14]);
     try std.testing.expectEqual(0, pic.REGS.STATUS.*.N);
     try std.testing.expectEqual(1, pic.REGS.STATUS.*.OV);
-    try std.testing.expectEqual(1, pic.REGS.STATUS.*.C);  // no borrow (0x80 > 0)
+    try std.testing.expectEqual(1, pic.REGS.STATUS.*.C); // no borrow (0x80 > 0)
     try std.testing.expectEqual(0, pic.REGS.STATUS.*.DC); // lower nibble 0-1 borrows
 
     // Case 6: 0x10 -> 0x0F, only digit borrow: DC=0, C=1
@@ -177,7 +132,7 @@ test "DECF instruction" {
     try std.testing.expectEqual(0, pic.REGS.STATUS.*.Z);
     try std.testing.expectEqual(0, pic.REGS.STATUS.*.N);
     try std.testing.expectEqual(0, pic.REGS.STATUS.*.OV);
-    try std.testing.expectEqual(1, pic.REGS.STATUS.*.C);  // no borrow
+    try std.testing.expectEqual(1, pic.REGS.STATUS.*.C); // no borrow
     try std.testing.expectEqual(0, pic.REGS.STATUS.*.DC); // digit borrow
 
     // Status Affected: C, DC, N, OV, Z
@@ -386,18 +341,45 @@ test "LFSR instruction" {
     // Status Affected None
 }
 
+test "MOVLB instruction" {
+    var pic = try asm2emu(
+        \\      MOVLB 2
+        \\      MOVLB 5
+        \\  END
+    );
+    defer pic.deinit();
+
+    // Doc example: before BSR=02h (set by first MOVLB), after BSR=05h
+    try pic.execInstruction();
+    try std.testing.expectEqual(0x02, pic.MEM[0xFE0]); // BSR = 0xFE0
+
+    try pic.execInstruction();
+    try std.testing.expectEqual(0x05, pic.MEM[0xFE0]);
+
+    // Status Affected: None
+}
+
 test "MOVFF instruction" {
     var pic = try asm2emu(
         \\      MOVFF 0x100, 0x200
+        \\      MOVFF 0x100, POSTDEC0
         \\  END
     );
     defer pic.deinit();
     pic.MEM[0x100] = 0x33;
     pic.MEM[0x200] = 0x11;
-    try pic.execInstruction();
+    pic.REGS.FSR0H.* = 0x00;
+    pic.REGS.FSR0L.* = 0x50;
 
+    // Plain register-to-register copy
+    try pic.execInstruction();
     try std.testing.expectEqual(0x33, pic.MEM[0x100]);
     try std.testing.expectEqual(0x33, pic.MEM[0x200]);
+
+    // MOVFF to POSTDEC0: writes to MEM[FSR0]=MEM[0x50], then FSR0 decrements to 0x4F
+    try pic.execInstruction();
+    try std.testing.expectEqual(0x33, pic.MEM[0x50]);
+    try std.testing.expectEqual(0x4F, pic.REGS.FSR0L.*);
 
     // Status Affected None
 }

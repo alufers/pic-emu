@@ -4,3 +4,5 @@ zig-out/
 build/
 build-*/
 docgen_tmp/
+.claude
+pilot.X.production.hex
