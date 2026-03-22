@@ -90,6 +90,78 @@ test "MOVWF instruction" {
     // Status Affected None
 }
 
+test "DECF instruction" {
+    // Six cases covering both destinations and all status bits.
+    // PIC18 carry convention for subtraction: C=1 no borrow, C=0 borrow.
+    // Same for DC: DC=1 no digit borrow, DC=0 digit borrow.
+    var pic = try asm2emu(
+        \\      DECF 0x10, 1, 0    ; d=1: result to f, normal decrement
+        \\      DECF 0x11, 0, 0    ; d=0: result to W, f must be unchanged
+        \\      DECF 0x12, 1, 0    ; 0x01 -> 0x00: Z=1
+        \\      DECF 0x13, 1, 0    ; 0x00 -> 0xFF: borrow C=0, N=1
+        \\      DECF 0x14, 1, 0    ; 0x80 -> 0x7F: signed OV=1, digit borrow DC=0
+        \\      DECF 0x15, 1, 0    ; 0x10 -> 0x0F: digit borrow DC=0, no borrow C=1
+        \\  END
+    );
+    defer pic.deinit();
+    pic.MEM[0x10] = 0x05;
+    pic.MEM[0x11] = 0x05;
+    pic.MEM[0x12] = 0x01;
+    pic.MEM[0x13] = 0x00;
+    pic.MEM[0x14] = 0x80;
+    pic.MEM[0x15] = 0x10;
+
+    // Case 1: d=1, 0x05 -> 0x04, result to f
+    try pic.execInstruction();
+    try std.testing.expectEqual(0x04, pic.MEM[0x10]);
+    try std.testing.expectEqual(0, pic.REGS.STATUS.*.Z);
+    try std.testing.expectEqual(0, pic.REGS.STATUS.*.N);
+    try std.testing.expectEqual(0, pic.REGS.STATUS.*.OV);
+    try std.testing.expectEqual(1, pic.REGS.STATUS.*.C);  // no borrow
+    try std.testing.expectEqual(1, pic.REGS.STATUS.*.DC); // no digit borrow
+
+    // Case 2: d=0, 0x05 -> 0x04, result to W; f must stay 0x05
+    try pic.execInstruction();
+    try std.testing.expectEqual(0x04, pic.REGS.WREG.*);
+    try std.testing.expectEqual(0x05, pic.MEM[0x11]);
+
+    // Case 3: 0x01 -> 0x00, Z=1
+    try pic.execInstruction();
+    try std.testing.expectEqual(0x00, pic.MEM[0x12]);
+    try std.testing.expectEqual(1, pic.REGS.STATUS.*.Z);
+    try std.testing.expectEqual(0, pic.REGS.STATUS.*.N);
+    try std.testing.expectEqual(1, pic.REGS.STATUS.*.C);  // no borrow
+    try std.testing.expectEqual(1, pic.REGS.STATUS.*.DC); // no digit borrow
+
+    // Case 4: 0x00 -> 0xFF, unsigned borrow: C=0, N=1
+    try pic.execInstruction();
+    try std.testing.expectEqual(0xFF, pic.MEM[0x13]);
+    try std.testing.expectEqual(0, pic.REGS.STATUS.*.Z);
+    try std.testing.expectEqual(1, pic.REGS.STATUS.*.N);
+    try std.testing.expectEqual(0, pic.REGS.STATUS.*.OV); // no signed overflow
+    try std.testing.expectEqual(0, pic.REGS.STATUS.*.C);  // borrow
+    try std.testing.expectEqual(0, pic.REGS.STATUS.*.DC); // digit borrow
+
+    // Case 5: 0x80 -> 0x7F, signed overflow: OV=1, N=0, digit borrow: DC=0
+    try pic.execInstruction();
+    try std.testing.expectEqual(0x7F, pic.MEM[0x14]);
+    try std.testing.expectEqual(0, pic.REGS.STATUS.*.N);
+    try std.testing.expectEqual(1, pic.REGS.STATUS.*.OV);
+    try std.testing.expectEqual(1, pic.REGS.STATUS.*.C);  // no borrow (0x80 > 0)
+    try std.testing.expectEqual(0, pic.REGS.STATUS.*.DC); // lower nibble 0-1 borrows
+
+    // Case 6: 0x10 -> 0x0F, only digit borrow: DC=0, C=1
+    try pic.execInstruction();
+    try std.testing.expectEqual(0x0F, pic.MEM[0x15]);
+    try std.testing.expectEqual(0, pic.REGS.STATUS.*.Z);
+    try std.testing.expectEqual(0, pic.REGS.STATUS.*.N);
+    try std.testing.expectEqual(0, pic.REGS.STATUS.*.OV);
+    try std.testing.expectEqual(1, pic.REGS.STATUS.*.C);  // no borrow
+    try std.testing.expectEqual(0, pic.REGS.STATUS.*.DC); // digit borrow
+
+    // Status Affected: C, DC, N, OV, Z
+}
+
 test "BNZ instruction - branch taken (Z=0)" {
     // Layout: BNZ skip (0x0000), NOP (0x0002), NOP (0x0004), skip: NOP (0x0006)
     // n=2 → new PC = 0x0002 + 2*2 = 0x0006

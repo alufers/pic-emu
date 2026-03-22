@@ -10,14 +10,22 @@ const readInt = std.mem.readInt;
 // TODO: move regs into memory (WREG, FSR)
 
 pub const PIC18 = struct {
+    /// https://onlinedocs.microchip.com/oxy/GUID-0C48BD90-048C-4F4F-9800-5D5269497C89-en-US-3/GUID-06A816BE-05BC-452E-AE33-7D4FD59DE5FD.html#GUID-06A816BE-05BC-452E-AE33-7D4FD59DE5FD
     const StatusReg = packed struct {
-        C: u1, // Carry
-        DC: u1, // Digit carry
-        Z: u1, // Zero
-        OV: u1, // Overflow
-        N: u1, // Negative
-        PD: u1, // Power down
-        TO: u1, // Timeout
+        /// Carry
+        C: u1,
+        /// Digit carry
+        DC: u1,
+        /// Zero
+        Z: u1,
+        /// Overflow
+        OV: u1,
+        /// Negative
+        N: u1,
+        /// Power down
+        PD: u1,
+        /// Timeout
+        TO: u1,
         unused: u1,
     };
     const RegAddrs = struct {
@@ -184,7 +192,7 @@ pub const PIC18 = struct {
             const fsr = try self.getFSR(0);
             const offset: i8 = @bitCast(self.REGS.WREG.*);
             return @intCast(@as(i32, fsr) + offset);
-        // FSR1 indirect
+            // FSR1 indirect
         } else if (ptr == self.REGS.INDF1) {
             return try self.getFSR(1);
         } else if (ptr == self.REGS.POSTINC1) {
@@ -203,7 +211,7 @@ pub const PIC18 = struct {
             const fsr = try self.getFSR(1);
             const offset: i8 = @bitCast(self.REGS.WREG.*);
             return @intCast(@as(i32, fsr) + offset);
-        // FSR2 indirect
+            // FSR2 indirect
         } else if (ptr == self.REGS.INDF2) {
             return try self.getFSR(2);
         } else if (ptr == self.REGS.POSTINC2) {
@@ -300,6 +308,31 @@ pub const PIC18 = struct {
                         self.REGS.TBLPTRU.* = @intCast((tblptr >> 16) & 0x0F);
                         self.REGS.TBLPTRH.* = @intCast((tblptr >> 8) & 0xFF);
                         self.REGS.TBLPTRL.* = @intCast(tblptr & 0xFF);
+                    },
+                    0b0100, 0b0101, 0b0110, 0b0111 => { // DECF Decrement f
+
+                        // Status Affected C, DC, N, OV, Z
+
+                        const dest_in_ram = (nibble2 & 0b0010) == 0b10; // If ‘d’ is ‘0’, the result is stored in W. If ‘d’ is ‘1’, the result is stored back in the register ‘f’ (default).
+                        const use_bsr = (nibble2 & 0b0001) == 1; // If ‘a’ is ‘0’, the Access Bank is selected. If ‘a’ is ‘1’, the BSR is used to select the GPR bank.
+
+                        std.debug.print("DECF use_bsr={} dest_in_ram={}  0x{x}\n", .{
+                            use_bsr,
+                            dest_in_ram,
+                            instruction & 0x00FF,
+                        });
+                        const val = try self.memRead(use_bsr, @intCast(instruction & 0x00FF)) -% 1;
+
+                        if (dest_in_ram) {
+                            try self.memWrite(use_bsr, @intCast(instruction & 0x00FF), val);
+                        } else {
+                            self.REGS.WREG.* = val;
+                        }
+                        self.REGS.STATUS.*.Z = if (val == 0) 1 else 0;
+                        self.REGS.STATUS.*.N = if (val & 0x80 != 0) 1 else 0;
+                        self.REGS.STATUS.*.OV = if (val == 0x7F) 1 else 0; // overflow if decrementing from 0x80 to 0x7F
+                        self.REGS.STATUS.*.DC = if (val & 0x0F == 0x0F) 0 else 1; // digit carry is set if borrow from bit 4
+                        self.REGS.STATUS.*.C = if (val == 0xFF) 0 else 1; // carry is set if borrow from bit 7
                     },
                     0b1110 => { // MOVLW - Move Literal to W
                         self.REGS.WREG.* = @intCast(instruction & 0x00FF);
