@@ -90,6 +90,27 @@ test "MOVWF instruction" {
     // Status Affected None
 }
 
+test "BCF instruction" {
+    var pic = try asm2emu(
+        \\      BCF 0x10, 7, 0    ; doc example: clear bit 7 of 0xC7 -> 0x47
+        \\      BCF 0x11, 3, 0    ; clear bit 3 of 0xFF -> 0xF7
+        \\  END
+    );
+    defer pic.deinit();
+    pic.MEM[0x10] = 0xC7;
+    pic.MEM[0x11] = 0xFF;
+
+    // Doc example: 0xC7 = 1100_0111, clear bit 7 -> 0100_0111 = 0x47
+    try pic.execInstruction();
+    try std.testing.expectEqual(0x47, pic.MEM[0x10]);
+
+    // 0xFF = 1111_1111, clear bit 3 -> 1111_0111 = 0xF7
+    try pic.execInstruction();
+    try std.testing.expectEqual(0xF7, pic.MEM[0x11]);
+
+    // Status Affected: None
+}
+
 test "DECF instruction" {
     // Six cases covering both destinations and all status bits.
     // PIC18 carry convention for subtraction: C=1 no borrow, C=0 borrow.

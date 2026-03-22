@@ -378,6 +378,13 @@ pub const PIC18 = struct {
                     else => return error.InvalidInstruction,
                 }
             },
+            0b1001 => { // BCF Bit Clear f
+                const bit_num: u3 = @intCast((nibble2 & 0b1110) >> 1);
+                const use_bsr = (nibble2 & 0b0001) == 1;
+                std.debug.print("BCF bit_num={} use_bsr={} 0x{x}\n", .{ bit_num, use_bsr, instruction & 0x00FF });
+                const val = try self.memRead(use_bsr, @intCast(instruction & 0x00FF)) & ~(@as(u8, 1) << bit_num);
+                try self.memWrite(use_bsr, @intCast(instruction & 0x00FF), val);
+            },
             0b1100 => { // MOVFF Move fs to fd
                 const second_word = self.consumeProgWord();
                 try self.check((second_word & 0xF000) >> 12 == 0b1111, "invalid MOVFF", .{});
