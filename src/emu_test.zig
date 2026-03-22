@@ -62,7 +62,6 @@ test "GOTO instruction" {
     // Status Affected None
 }
 
-
 test "MOVLW instruction" {
     var pic = try asm2emu(
         \\      MOVLW 0x42
@@ -73,20 +72,20 @@ test "MOVLW instruction" {
 
     try std.testing.expectEqual(0x42, pic.REGS.WREG.*);
 
-     // Status Affected None
+    // Status Affected None
 }
 
 test "MOVWF instruction" {
     var pic = try asm2emu(
         \\      MOVLW 0x42
-        \\      MOVWF 0xdc, 0
+        \\      MOVWF 0x10, 0
         \\  END
     );
     defer pic.deinit();
     try pic.execInstruction();
     try pic.execInstruction();
 
-    try std.testing.expectEqual(0x42, pic.MEM[0xfdc]);
+    try std.testing.expectEqual(0x42, pic.MEM[0x10]);
 
     // Status Affected None
 }
@@ -111,23 +110,117 @@ test "BNZ instruction - branch taken (Z=0)" {
     // Status Affected: None
 }
 
-// test "BNZ instruction - branch not taken (Z=1)" {
-//     var pic = try asm2emu(
-//         \\      BNZ skip
-//         \\      NOP
-//         \\      NOP
-//         \\  Skip
-//         \\      NOP
-//         \\  END
-//     );
-//     defer pic.deinit();
-//     pic.REGS.STATUS.*.Z = 1;
-//     try pic.execInstruction();
+test "BNZ instruction - branch not taken (Z=1)" {
+    var pic = try asm2emu(
+        \\      BNZ skip
+        \\      NOP
+        \\      NOP
+        \\skip
+        \\      NOP
+        \\  END
+    );
+    defer pic.deinit();
+    pic.REGS.STATUS.*.Z = 1;
+    try pic.execInstruction();
 
-//     try std.testing.expectEqual(2, pic.PC);
+    try std.testing.expectEqual(2, pic.PC);
 
-//     // Status Affected: None
-// }
+    // Status Affected: None
+}
+
+test "indirect register addressing (INDF/POSTINC/POSTDEC/PREINC/PLUSW for FSR0,1,2)" {
+    // FSR0=0x10, FSR1=0x20, FSR2=0x30, WREG offset for PLUSW=5
+    //
+    // FSR0 state trace:
+    //   INDF0:    reads MEM[0x10]=0xA0, FSR0=0x10
+    //   POSTINC0: reads MEM[0x10]=0xA0, FSR0->0x11
+    //   POSTDEC0: reads MEM[0x11]=0xA1, FSR0->0x10
+    //   PREINC0:  FSR0->0x11, reads MEM[0x11]=0xA1
+    //   PLUSW0:   reads MEM[0x11+5]=MEM[0x16]=0xA6, FSR0=0x11
+    // Same pattern for FSR1 (0xB_) and FSR2 (0xC_).
+    var pic = try asm2emu(
+        \\      MOVF INDF0, 0, 0
+        \\      MOVWF 0x50, 0
+        \\      MOVF POSTINC0, 0, 0
+        \\      MOVWF 0x51, 0
+        \\      MOVF POSTDEC0, 0, 0
+        \\      MOVWF 0x52, 0
+        \\      MOVF PREINC0, 0, 0
+        \\      MOVWF 0x53, 0
+        \\      MOVLW 5
+        \\      MOVF PLUSW0, 0, 0
+        \\      MOVWF 0x54, 0
+        \\      MOVF INDF1, 0, 0
+        \\      MOVWF 0x55, 0
+        \\      MOVF POSTINC1, 0, 0
+        \\      MOVWF 0x56, 0
+        \\      MOVF POSTDEC1, 0, 0
+        \\      MOVWF 0x57, 0
+        \\      MOVF PREINC1, 0, 0
+        \\      MOVWF 0x58, 0
+        \\      MOVLW 5
+        \\      MOVF PLUSW1, 0, 0
+        \\      MOVWF 0x59, 0
+        \\      MOVF INDF2, 0, 0
+        \\      MOVWF 0x5A, 0
+        \\      MOVF POSTINC2, 0, 0
+        \\      MOVWF 0x5B, 0
+        \\      MOVF POSTDEC2, 0, 0
+        \\      MOVWF 0x5C, 0
+        \\      MOVF PREINC2, 0, 0
+        \\      MOVWF 0x5D, 0
+        \\      MOVLW 5
+        \\      MOVF PLUSW2, 0, 0
+        \\      MOVWF 0x5E, 0
+        \\  END
+    );
+    defer pic.deinit();
+
+    pic.REGS.FSR0H.* = 0x00;
+    pic.REGS.FSR0L.* = 0x10;
+    pic.REGS.FSR1H.* = 0x00;
+    pic.REGS.FSR1L.* = 0x20;
+    pic.REGS.FSR2H.* = 0x00;
+    pic.REGS.FSR2L.* = 0x30;
+
+    // FSR0 region
+    pic.MEM[0x10] = 0xA0; // INDF0, POSTINC0
+    pic.MEM[0x11] = 0xA1; // POSTDEC0, PREINC0
+    pic.MEM[0x16] = 0xA6; // PLUSW0 (FSR0=0x11, W=5 → 0x16)
+    // FSR1 region
+    pic.MEM[0x20] = 0xB0; // INDF1, POSTINC1
+    pic.MEM[0x21] = 0xB1; // POSTDEC1, PREINC1
+    pic.MEM[0x26] = 0xB6; // PLUSW1 (FSR1=0x21, W=5 → 0x26)
+    // FSR2 region
+    pic.MEM[0x30] = 0xC0; // INDF2, POSTINC2
+    pic.MEM[0x31] = 0xC1; // POSTDEC2, PREINC2
+    pic.MEM[0x36] = 0xC6; // PLUSW2 (FSR2=0x31, W=5 → 0x36)
+
+    for (0..33) |_| try pic.execInstruction();
+
+    // FSR0 results
+    try std.testing.expectEqual(0xA0, pic.MEM[0x50]); // INDF0
+    try std.testing.expectEqual(0xA0, pic.MEM[0x51]); // POSTINC0 (reads before increment)
+    try std.testing.expectEqual(0xA1, pic.MEM[0x52]); // POSTDEC0 (FSR0 was 0x11 after POSTINC)
+    try std.testing.expectEqual(0xA1, pic.MEM[0x53]); // PREINC0 (increments to 0x11 first)
+    try std.testing.expectEqual(0xA6, pic.MEM[0x54]); // PLUSW0 (0x11+5=0x16)
+    // FSR1 results
+    try std.testing.expectEqual(0xB0, pic.MEM[0x55]); // INDF1
+    try std.testing.expectEqual(0xB0, pic.MEM[0x56]); // POSTINC1
+    try std.testing.expectEqual(0xB1, pic.MEM[0x57]); // POSTDEC1
+    try std.testing.expectEqual(0xB1, pic.MEM[0x58]); // PREINC1
+    try std.testing.expectEqual(0xB6, pic.MEM[0x59]); // PLUSW1 (0x21+5=0x26)
+    // FSR2 results
+    try std.testing.expectEqual(0xC0, pic.MEM[0x5A]); // INDF2
+    try std.testing.expectEqual(0xC0, pic.MEM[0x5B]); // POSTINC2
+    try std.testing.expectEqual(0xC1, pic.MEM[0x5C]); // POSTDEC2
+    try std.testing.expectEqual(0xC1, pic.MEM[0x5D]); // PREINC2
+    try std.testing.expectEqual(0xC6, pic.MEM[0x5E]); // PLUSW2 (0x31+5=0x36)
+    // Final FSR states (each left at base+1 after PREINC, PLUSW does not modify)
+    try std.testing.expectEqual(0x11, pic.REGS.FSR0L.*);
+    try std.testing.expectEqual(0x21, pic.REGS.FSR1L.*);
+    try std.testing.expectEqual(0x31, pic.REGS.FSR2L.*);
+}
 
 test "CLRF instruction" {
     var pic = try asm2emu(

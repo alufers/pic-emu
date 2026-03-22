@@ -33,6 +33,21 @@ pub const PIC18 = struct {
         FSR2L: *u8,
         FSR2H: *u8,
         STATUS: *StatusReg,
+        INDF0: *u8,
+        POSTINC0: *u8,
+        POSTDEC0: *u8,
+        PREINC0: *u8,
+        PLUSW0: *u8,
+        INDF1: *u8,
+        POSTINC1: *u8,
+        POSTDEC1: *u8,
+        PREINC1: *u8,
+        PLUSW1: *u8,
+        INDF2: *u8,
+        POSTINC2: *u8,
+        POSTDEC2: *u8,
+        PREINC2: *u8,
+        PLUSW2: *u8,
     };
 
     allocator: std.mem.Allocator,
@@ -77,6 +92,24 @@ pub const PIC18 = struct {
                 .FSR2L = &mem[0xFEE],
                 .FSR2H = &mem[0xFEF],
                 .STATUS = @ptrCast(&mem[0xFD8]),
+
+                .INDF0 = &mem[0xFEF],
+                .POSTINC0 = &mem[0xFEE],
+                .POSTDEC0 = &mem[0xFED],
+                .PREINC0 = &mem[0xFEC],
+                .PLUSW0 = &mem[0xFEB],
+
+                .INDF1 = &mem[0xFE7],
+                .POSTINC1 = &mem[0xFE6],
+                .POSTDEC1 = &mem[0xFE5],
+                .PREINC1 = &mem[0xFE4],
+                .PLUSW1 = &mem[0xFE3],
+
+                .INDF2 = &mem[0xFDF],
+                .POSTINC2 = &mem[0xFDE],
+                .POSTDEC2 = &mem[0xFDD],
+                .PREINC2 = &mem[0xFDC],
+                .PLUSW2 = &mem[0xFDB],
             },
         };
         return pic;
@@ -114,56 +147,128 @@ pub const PIC18 = struct {
         }
     }
 
-    fn memWrite(self: *PIC18, use_bsr: bool, addr: u8, val: u8) !void {
-        var bank: u16 = 0;
+    fn accessBankFullAddr(self: *PIC18, use_bsr: bool, addr: u8) !u16 {
         if (use_bsr) {
             try self.check(false, "NON ACCESS BANK WRITE NOT IMPLEMENTED", .{});
-        } else {
-            // The Access Bank consists of the first 96 bytes of
-            // memory (00h-5Fh) in Bank 0 and the last 160 bytes of
-            // memory (60h-FFh) in Bank 15. The lower half is known
-            // as the “Access RAM” and is composed of GPRs. The
-            // upper half is where the device’s SFRs are mapped.
-            // These two areas are mapped contiguously in the
-            // Access Bank and can be addressed in a linear fashion
-            // by an eight-bit address
-            if (addr < 96) {
-                // Access GPRs (bank 0)
-                bank = 0;
-            } else {
-                // Access SFRs (bank 15)
-                bank = 15;
-            }
         }
+        // The Access Bank consists of the first 96 bytes of
+        // memory (00h-5Fh) in Bank 0 and the last 160 bytes of
+        // memory (60h-FFh) in Bank 15. The lower half is known
+        // as the “Access RAM” and is composed of GPRs. The
+        // upper half is where the device’s SFRs are mapped.
+        // These two areas are mapped contiguously in the
+        // Access Bank and can be addressed in a linear fashion
+        // by an eight-bit address
+        const bank: u16 = if (addr < 96) 0 else 15;
+        return bank * 256 + addr;
+    }
 
-        std.debug.print("MEM[0x{x}] = 0x{x} (bank: {})\n", .{ bank * 256 + addr, val, bank });
+    fn resolveIndirect(self: *PIC18, full_addr: u16) !u16 {
+        const ptr = &self.MEM[full_addr];
+        // FSR0 indirect
+        if (ptr == self.REGS.INDF0) {
+            return try self.getFSR(0);
+        } else if (ptr == self.REGS.POSTINC0) {
+            const fsr = try self.getFSR(0);
+            try self.setFSR(0, fsr +% 1);
+            return fsr;
+        } else if (ptr == self.REGS.POSTDEC0) {
+            const fsr = try self.getFSR(0);
+            try self.setFSR(0, fsr -% 1);
+            return fsr;
+        } else if (ptr == self.REGS.PREINC0) {
+            const fsr = try self.getFSR(0) +% 1;
+            try self.setFSR(0, fsr);
+            return fsr;
+        } else if (ptr == self.REGS.PLUSW0) {
+            const fsr = try self.getFSR(0);
+            const offset: i8 = @bitCast(self.REGS.WREG.*);
+            return @intCast(@as(i32, fsr) + offset);
+        // FSR1 indirect
+        } else if (ptr == self.REGS.INDF1) {
+            return try self.getFSR(1);
+        } else if (ptr == self.REGS.POSTINC1) {
+            const fsr = try self.getFSR(1);
+            try self.setFSR(1, fsr +% 1);
+            return fsr;
+        } else if (ptr == self.REGS.POSTDEC1) {
+            const fsr = try self.getFSR(1);
+            try self.setFSR(1, fsr -% 1);
+            return fsr;
+        } else if (ptr == self.REGS.PREINC1) {
+            const fsr = try self.getFSR(1) +% 1;
+            try self.setFSR(1, fsr);
+            return fsr;
+        } else if (ptr == self.REGS.PLUSW1) {
+            const fsr = try self.getFSR(1);
+            const offset: i8 = @bitCast(self.REGS.WREG.*);
+            return @intCast(@as(i32, fsr) + offset);
+        // FSR2 indirect
+        } else if (ptr == self.REGS.INDF2) {
+            return try self.getFSR(2);
+        } else if (ptr == self.REGS.POSTINC2) {
+            const fsr = try self.getFSR(2);
+            try self.setFSR(2, fsr +% 1);
+            return fsr;
+        } else if (ptr == self.REGS.POSTDEC2) {
+            const fsr = try self.getFSR(2);
+            try self.setFSR(2, fsr -% 1);
+            return fsr;
+        } else if (ptr == self.REGS.PREINC2) {
+            const fsr = try self.getFSR(2) +% 1;
+            try self.setFSR(2, fsr);
+            return fsr;
+        } else if (ptr == self.REGS.PLUSW2) {
+            const fsr = try self.getFSR(2);
+            const offset: i8 = @bitCast(self.REGS.WREG.*);
+            return @intCast(@as(i32, fsr) + offset);
+        }
+        return full_addr;
+    }
 
-        self.MEM[bank * 256 + addr] = val;
+    fn memWrite(self: *PIC18, use_bsr: bool, addr: u8, val: u8) !void {
+        const full_addr = try self.resolveIndirect(try self.accessBankFullAddr(use_bsr, addr));
+        self.MEM[full_addr] = val;
     }
 
     fn memRead(self: *PIC18, use_bsr: bool, addr: u8) !u8 {
-        var bank: u16 = 0;
-        if (use_bsr) {
-            try self.check(false, "NON ACCESS BANK WRITE NOT IMPLEMENTED", .{});
-        } else {
-            // The Access Bank consists of the first 96 bytes of
-            // memory (00h-5Fh) in Bank 0 and the last 160 bytes of
-            // memory (60h-FFh) in Bank 15. The lower half is known
-            // as the “Access RAM” and is composed of GPRs. The
-            // upper half is where the device’s SFRs are mapped.
-            // These two areas are mapped contiguously in the
-            // Access Bank and can be addressed in a linear fashion
-            // by an eight-bit address
-            if (addr < 96) {
-                // Access GPRs (bank 0)
-                bank = 0;
-            } else {
-                // Access SFRs (bank 15)
-                bank = 15;
-            }
-        }
+        const full_addr = try self.resolveIndirect(try self.accessBankFullAddr(use_bsr, addr));
+        return self.MEM[full_addr];
+    }
 
-        return self.MEM[bank * 256 + addr];
+    fn setFSR(self: *PIC18, FSR_num: u8, val: u16) !void {
+        const val_l: u8 = @intCast(val & 0xFF);
+        const val_h: u8 = @intCast((val >> 8) & 0xFF);
+        switch (FSR_num) {
+            0 => {
+                self.REGS.FSR0L.* = val_l;
+                self.REGS.FSR0H.* = val_h;
+            },
+            1 => {
+                self.REGS.FSR1L.* = val_l;
+                self.REGS.FSR1H.* = val_h;
+            },
+            2 => {
+                self.REGS.FSR2L.* = val_l;
+                self.REGS.FSR2H.* = val_h;
+            },
+            else => return error.InvalidInstruction,
+        }
+    }
+
+    fn getFSR(self: *PIC18, FSR_num: u8) !u16 {
+        switch (FSR_num) {
+            0 => {
+                return @as(u16, self.REGS.FSR0H.*) << 8 | @as(u16, self.REGS.FSR0L.*);
+            },
+            1 => {
+                return @as(u16, self.REGS.FSR1H.*) << 8 | @as(u16, self.REGS.FSR1L.*);
+            },
+            2 => {
+                return @as(u16, self.REGS.FSR2H.*) << 8 | @as(u16, self.REGS.FSR2L.*);
+            },
+            else => return error.InvalidInstruction,
+        }
     }
 
     pub fn execInstruction(self: *PIC18) !void {
@@ -260,29 +365,13 @@ pub const PIC18 = struct {
                         std.debug.print("BNZ n={} Z={} -> PC=0x{x}\n", .{ n, self.REGS.STATUS.*.Z, self.PC });
                     },
                     0b1110 => { // LFSR - Load FSR (File select register)
-                        const FSR_num = (instruction & 0x00F0) >> 4;
+                        const FSR_num: u8 = @intCast((instruction & 0x00F0) >> 4);
                         try self.check(FSR_num <= 2, "FSR_num too big", .{});
                         const second_word = self.consumeProgWord();
                         try self.check((second_word & 0xF000) >> 12 == 0b1111, "invalid LFSR", .{});
                         const val = (instruction & 0x000F) << 8 | (second_word & 0x0FFF);
                         std.debug.print("LFSR: 0x{x}\n", .{val});
-                        const val_l: u8 = @intCast(val & 0xFF);
-                        const val_h: u8 = @intCast((val >> 8) & 0xFF);
-                        switch (FSR_num) {
-                            0 => {
-                                self.REGS.FSR0L.* = val_l;
-                                self.REGS.FSR0H.* = val_h;
-                            },
-                            1 => {
-                                self.REGS.FSR1L.* = val_l;
-                                self.REGS.FSR1H.* = val_h;
-                            },
-                            2 => {
-                                self.REGS.FSR2L.* = val_l;
-                                self.REGS.FSR2H.* = val_h;
-                            },
-                            else => return error.InvalidInstruction,
-                        }
+                        try self.setFSR(FSR_num, val);
                     },
                     0b1111 => { // GOTO
                         const second_word = self.consumeProgWord();
