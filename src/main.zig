@@ -432,6 +432,10 @@ pub const PIC18 = struct {
             0b0110 => {
                 const use_bsr = (nibble2 & 0b0001) == 1;
                 switch (nibble2 & 0b1110) {
+                    0b1000 => { // SETF - Set f (to all ones)
+                        std.debug.print("SETF 0x{x}\n", .{instruction & 0x00FF});
+                        try self.memWrite(use_bsr, @intCast(instruction & 0x00FF), 0xFF);
+                    },
                     0b1010 => { // CLRF Clear register f
                         std.debug.print("CLRF 0x{x}\n", .{instruction & 0x00FF});
                         try self.memWrite(use_bsr, @intCast(instruction & 0x00FF), 0);

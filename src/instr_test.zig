@@ -45,6 +45,27 @@ test "MOVWF instruction" {
     // Status Affected None
 }
 
+test "SETF instruction" {
+    var pic = try asm2emu(
+        \\      SETF 0x10, 0    ; access bank -> 0xFF
+        \\      MOVLB 5
+        \\      SETF 0x20, 1   ; BSR bank 5 -> 0xFF
+        \\  END
+    );
+    defer pic.deinit();
+    pic.MEM[0x10] = 0x00;
+    pic.MEM[0x520] = 0x00;
+
+    try pic.execInstruction();
+    try std.testing.expectEqual(0xFF, pic.MEM[0x10]);
+
+    try pic.execInstruction(); // MOVLB 5
+    try pic.execInstruction(); // SETF 0x20, 1
+    try std.testing.expectEqual(0xFF, pic.MEM[0x520]);
+
+    // Status Affected: None
+}
+
 test "BCF instruction" {
     var pic = try asm2emu(
         \\      BCF 0x10, 7, 0    ; doc example: clear bit 7 of 0xC7 -> 0x47
