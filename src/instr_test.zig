@@ -66,6 +66,67 @@ test "BCF instruction" {
     // Status Affected: None
 }
 
+test "BSF instruction" {
+    var pic = try asm2emu(
+        \\      BSF 0x10, 7, 0    ; doc example: 0x0A | bit7 = 0x8A, access bank
+        \\      BSF 0x11, 0, 0    ; set bit 0 of 0xF0 -> 0xF1
+        \\      BSF 0x12, 3, 0    ; set already-set bit: 0xFF -> 0xFF
+        \\      MOVLB 2
+        \\      BSF 0x20, 4, 1   ; 0x01 | bit4 = 0x11, BSR bank 2
+        \\  END
+    );
+    defer pic.deinit();
+    pic.MEM[0x10] = 0x0A;
+    pic.MEM[0x11] = 0xF0;
+    pic.MEM[0x12] = 0xFF;
+    pic.MEM[0x220] = 0x01;
+
+    try pic.execInstruction();
+    try std.testing.expectEqual(0x8A, pic.MEM[0x10]);
+
+    try pic.execInstruction();
+    try std.testing.expectEqual(0xF1, pic.MEM[0x11]);
+
+    try pic.execInstruction();
+    try std.testing.expectEqual(0xFF, pic.MEM[0x12]);
+
+    try pic.execInstruction(); // MOVLB 2
+    try pic.execInstruction(); // BSF 0x20, 4, 1
+    try std.testing.expectEqual(0x11, pic.MEM[0x220]);
+
+    // Status Affected: None
+}
+
+test "BTG instruction" {
+    var pic = try asm2emu(
+        \\      BTG 0x10, 4, 0    ; doc example: 0x75 toggle bit4 = 0x65, access bank
+        \\      BTG 0x11, 0, 0    ; toggle bit 0 of 0xF0 -> 0xF1
+        \\      BTG 0x11, 0, 0    ; toggle back -> 0xF0
+        \\      MOVLB 3
+        \\      BTG 0x20, 7, 1   ; 0x0F toggle bit7 = 0x8F, BSR bank 3
+        \\  END
+    );
+    defer pic.deinit();
+    pic.MEM[0x10] = 0x75;
+    pic.MEM[0x11] = 0xF0;
+    pic.MEM[0x320] = 0x0F;
+
+    try pic.execInstruction();
+    try std.testing.expectEqual(0x65, pic.MEM[0x10]);
+
+    try pic.execInstruction();
+    try std.testing.expectEqual(0xF1, pic.MEM[0x11]);
+
+    try pic.execInstruction();
+    try std.testing.expectEqual(0xF0, pic.MEM[0x11]);
+
+    try pic.execInstruction(); // MOVLB 3
+    try pic.execInstruction(); // BTG 0x20, 7, 1
+    try std.testing.expectEqual(0x8F, pic.MEM[0x320]);
+
+    // Status Affected: None
+}
+
 test "DECF instruction" {
     // Six cases covering both destinations and all status bits.
     // PIC18 carry convention for subtraction: C=1 no borrow, C=0 borrow.
