@@ -148,6 +148,40 @@ test "BTG instruction" {
     // Status Affected: None
 }
 
+test "BTFSC instruction" {
+    var pic = try asm2emu(
+        \\      BTFSC 0x10, 3, 0   ; bit 3 of 0x00 = 0 -> skip
+        \\      MOVLW 0xFF         ; trap
+        \\      MOVLW 0x11         ; WREG = 0x11 (skip happened)
+        \\      BTFSC 0x11, 3, 0   ; bit 3 of 0x08 = 1 -> no skip
+        \\      MOVLW 0x22         ; WREG = 0x22 (no skip)
+        \\      MOVLB 2
+        \\      BTFSC 0x20, 5, 1   ; bit 5 of MEM[0x220]=0x03 = 0 -> skip, BSR bank 2
+        \\      MOVLW 0xFF         ; trap
+        \\      MOVLW 0x44         ; WREG = 0x44 (skip happened)
+        \\  END
+    );
+    defer pic.deinit();
+    pic.MEM[0x10] = 0x00; // bit 3 = 0 -> skip
+    pic.MEM[0x11] = 0x08; // bit 3 = 1 -> no skip
+    pic.MEM[0x220] = 0x03; // bit 5 = 0 -> skip
+
+    try pic.execInstruction(); // BTFSC 0x10, 3 -> skip
+    try pic.execInstruction(); // MOVLW 0x11
+    try std.testing.expectEqual(0x11, pic.REGS.WREG.*);
+
+    try pic.execInstruction(); // BTFSC 0x11, 3 -> no skip
+    try pic.execInstruction(); // MOVLW 0x22
+    try std.testing.expectEqual(0x22, pic.REGS.WREG.*);
+
+    try pic.execInstruction(); // MOVLB 2
+    try pic.execInstruction(); // BTFSC 0x20, 5, 1 -> skip
+    try pic.execInstruction(); // MOVLW 0x44
+    try std.testing.expectEqual(0x44, pic.REGS.WREG.*);
+
+    // Status Affected: None
+}
+
 test "DECF instruction" {
     // Six cases covering both destinations and all status bits.
     // PIC18 carry convention for subtraction: C=1 no borrow, C=0 borrow.
@@ -254,6 +288,36 @@ test "BNZ instruction - branch not taken (Z=1)" {
     try pic.execInstruction();
 
     try std.testing.expectEqual(2, pic.PC);
+
+    // Status Affected: None
+}
+
+test "BRA instruction - forward and backward branch" {
+    var pic = try asm2emu(
+        \\      BRA forward        ; forward: skip trap
+        \\      MOVLW 0xFF         ; trap
+        \\forward:
+        \\      MOVLW 0x11         ; WREG = 0x11
+        \\      BRA skip_backward  ; skip over back_here
+        \\back_here:
+        \\      MOVLW 0x22         ; WREG = 0x22, reached via backward branch
+        \\      BRA done
+        \\skip_backward:
+        \\      BRA back_here      ; backward branch
+        \\done:
+        \\      NOP
+        \\  END
+    );
+    defer pic.deinit();
+
+    try pic.execInstruction(); // BRA forward (skip trap)
+    try pic.execInstruction(); // MOVLW 0x11
+    try std.testing.expectEqual(0x11, pic.REGS.WREG.*); // trap was skipped
+
+    try pic.execInstruction(); // BRA skip_backward
+    try pic.execInstruction(); // BRA back_here (backward branch)
+    try pic.execInstruction(); // MOVLW 0x22
+    try std.testing.expectEqual(0x22, pic.REGS.WREG.*); // backward branch worked
 
     // Status Affected: None
 }

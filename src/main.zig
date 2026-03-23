@@ -468,6 +468,16 @@ pub const PIC18 = struct {
                 const val = try self.memRead(use_bsr, @intCast(instruction & 0x00FF)) | (@as(u8, 1) << bit_num);
                 try self.memWrite(use_bsr, @intCast(instruction & 0x00FF), val);
             },
+            0b1011 => { // BTFSC - Bit Test File, Skip if Clear
+                const bit_num: u3 = @intCast((nibble2 & 0b1110) >> 1);
+                const use_bsr = (nibble2 & 0b0001) == 1;
+                std.debug.print("BTFSC bit_num={} use_bsr={} 0x{x}\n", .{ bit_num, use_bsr, instruction & 0x00FF });
+                const val = try self.memRead(use_bsr, @intCast(instruction & 0x00FF));
+                if ((val & (@as(u8, 1) << bit_num)) == 0) {
+                    self.PC += 2; // skip next instruction
+                    std.debug.print("BTFSC skipping next instruction because bit is clear\n", .{});
+                }
+            },
             0b1001 => { // BCF Bit Clear f
                 const bit_num: u3 = @intCast((nibble2 & 0b1110) >> 1);
                 const use_bsr = (nibble2 & 0b0001) == 1;
@@ -494,6 +504,16 @@ pub const PIC18 = struct {
                 const indirect_fs = try self.resolveIndirect(fs);
                 const indirect_fd = try self.resolveIndirect(fd);
                 self.MEM[indirect_fd] = self.MEM[indirect_fs];
+            },
+            0b1101 => {
+                switch (nibble2 & 0b1000) {
+                    0b0000 => { // BRA - Unconditional branch
+                        const n: i11 = @bitCast(@as(u11, @intCast(instruction & 0b0000_0111_1111_1111)));
+                        self.PC = @intCast(@as(i32, self.PC) + 2 * @as(i32, n));
+                        std.debug.print("BRA n={} -> PC=0x{x}\n", .{ n, self.PC });
+                    },
+                    else => return error.InvalidInstruction,
+                }
             },
             0b1110 => {
                 switch (nibble2) {
