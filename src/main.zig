@@ -297,33 +297,39 @@ pub const PIC18 = struct {
         const nibble1 = @as(u4, @intCast((instruction & 0xF000) >> 12));
         const nibble2 = @as(u4, @intCast((instruction & 0x0F00) >> 8));
         const nibble3 = @as(u4, @intCast((instruction & 0x00F0) >> 4));
+        const nibble4 = @as(u4, @intCast(instruction & 0x000F));
         switch (nibble1) {
             0b0000 => {
                 switch (nibble2) {
                     0b0000 => {
                         switch (nibble3) {
-                            0b0000 => { // TBLRD
+                            0b0000 => {
+                                if (nibble4 == 0b000) {
+                                    std.debug.print("NOP\n", .{});
+                                } else if (nibble4 & 0b1100 != 0) { // TBLRD - Table read
+                                    // supposedly the third nibble is 0000, but for some reason it is allowed to be non-zero
+                                    const mm = instruction & 0x0003;
 
-                                // supposedly the third nibble is 0000, but for some reason it is allowed to be non-zero
-                                const mm = instruction & 0x0003;
-
-                                // todo implement pre-increment, post incrmement based on tbptr
-                                try self.check(self.REGS.TBLPTRU.* & 0xF0 == 0, "device config acces via tblptr not implemented", .{});
-                                var tblptr: u21 = (@as(u21, self.REGS.TBLPTRU.* & 0x0F) << 16) | (@as(u21, self.REGS.TBLPTRH.*) << 8) | @as(u21, self.REGS.TBLPTRL.*);
-                                if (mm == 3) {
-                                    tblptr += 1;
+                                    // todo implement pre-increment, post incrmement based on tbptr
+                                    try self.check(self.REGS.TBLPTRU.* & 0xF0 == 0, "device config acces via tblptr not implemented", .{});
+                                    var tblptr: u21 = (@as(u21, self.REGS.TBLPTRU.* & 0x0F) << 16) | (@as(u21, self.REGS.TBLPTRH.*) << 8) | @as(u21, self.REGS.TBLPTRL.*);
+                                    if (mm == 3) {
+                                        tblptr += 1;
+                                    }
+                                    std.debug.print("TBLRD mm={}, tblptr=0x{x}\n", .{ mm, tblptr });
+                                    self.REGS.TBLAT.* = self.PROG[tblptr];
+                                    if (mm == 1) {
+                                        tblptr += 1;
+                                    } else if (mm == 2) {
+                                        tblptr -= 1;
+                                    }
+                                    // Write back TBLPTR
+                                    self.REGS.TBLPTRU.* = @intCast((tblptr >> 16) & 0x0F);
+                                    self.REGS.TBLPTRH.* = @intCast((tblptr >> 8) & 0xFF);
+                                    self.REGS.TBLPTRL.* = @intCast(tblptr & 0xFF);
+                                } else {
+                                    return error.InvalidInstruction;
                                 }
-                                std.debug.print("TBLRD mm={}, tblptr=0x{x}\n", .{ mm, tblptr });
-                                self.REGS.TBLAT.* = self.PROG[tblptr];
-                                if (mm == 1) {
-                                    tblptr += 1;
-                                } else if (mm == 2) {
-                                    tblptr -= 1;
-                                }
-                                // Write back TBLPTR
-                                self.REGS.TBLPTRU.* = @intCast((tblptr >> 16) & 0x0F);
-                                self.REGS.TBLPTRH.* = @intCast((tblptr >> 8) & 0xFF);
-                                self.REGS.TBLPTRL.* = @intCast(tblptr & 0xFF);
                             },
                             0b0001 => { // RETURN
                                 const use_shadow = instruction & 0x0001 == 1;
@@ -377,6 +383,13 @@ pub const PIC18 = struct {
                         std.debug.print("ANDLW 0x{x}\n", .{self.REGS.WREG.*});
                         self.REGS.STATUS.*.Z = if (self.REGS.WREG.* == 0) 1 else 0;
                         self.REGS.STATUS.*.N = if (self.REGS.WREG.* & 0x80 != 0) 1 else 0;
+                    },
+                    0b1100 => { // RETLW- Return Literal to W
+                        try self.check(self.REGS.STKPTR.* > 0, "stack underflow on RETURN", .{}); // TODO: implement stack underflow handling
+                        self.REGS.STKPTR.* -= 1;
+                        self.PC = self.STACK[self.REGS.STKPTR.*];
+                        self.REGS.WREG.* = @intCast(instruction & 0x00FF);
+                        std.debug.print("RETLW 0x{x}, return to 0x{x}\n", .{ self.REGS.WREG.*, self.PC });
                     },
                     0b1110 => { // MOVLW - Move Literal to W
                         self.REGS.WREG.* = @intCast(instruction & 0x00FF);

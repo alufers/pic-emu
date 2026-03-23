@@ -706,6 +706,44 @@ test "TBLRD +* instruction (pre-increment)" {
     // Status Affected None
 }
 
+test "RETLW instruction" {
+    var pic = try asm2emu(
+        \\      CALL entry0, 0
+        \\      NOP
+        \\      CALL entry1, 0
+        \\      NOP
+        \\      CALL entry2, 0
+        \\      NOP
+        \\entry0:
+        \\      RETLW 0xAA
+        \\entry1:
+        \\      RETLW 0xBB
+        \\entry2:
+        \\      RETLW 0xCC
+        \\  END
+    );
+    defer pic.deinit();
+
+    try pic.execInstruction(); // CALL entry0
+    try pic.execInstruction(); // RETLW 0xAA
+    try std.testing.expectEqual(0xAA, pic.REGS.WREG.*);
+    try std.testing.expectEqual(0x04, pic.PC); // returned to NOP after first CALL
+
+    try pic.execInstruction(); // NOP
+    try pic.execInstruction(); // CALL entry1
+    try pic.execInstruction(); // RETLW 0xBB
+    try std.testing.expectEqual(0xBB, pic.REGS.WREG.*);
+    try std.testing.expectEqual(0x0A, pic.PC); // returned to NOP after second CALL
+
+    try pic.execInstruction(); // NOP
+    try pic.execInstruction(); // CALL entry2
+    try pic.execInstruction(); // RETLW 0xCC
+    try std.testing.expectEqual(0xCC, pic.REGS.WREG.*);
+    try std.testing.expectEqual(0x10, pic.PC); // returned to NOP after third CALL
+
+    // Status Affected: None
+}
+
 test "CALL and RETURN instruction" {
     var pic = try asm2emu(
         \\      CALL sub_a, 0
