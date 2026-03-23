@@ -366,6 +366,18 @@ pub const PIC18 = struct {
                         self.REGS.STATUS.*.DC = if (val & 0x0F == 0x0F) 0 else 1; // digit carry is set if borrow from bit 4
                         self.REGS.STATUS.*.C = if (val == 0xFF) 0 else 1; // carry is set if borrow from bit 7
                     },
+                    0b1001 => { // IORLW - Inclusive OR Literal with W
+                        self.REGS.WREG.* = self.REGS.WREG.* | @as(u8, @intCast(instruction & 0x00FF));
+                        std.debug.print("IORLW 0x{x}\n", .{self.REGS.WREG.*});
+                        self.REGS.STATUS.*.Z = if (self.REGS.WREG.* == 0) 1 else 0;
+                        self.REGS.STATUS.*.N = if (self.REGS.WREG.* & 0x80 != 0) 1 else 0;
+                    },
+                    0b1011 => { // ANDLW - AND Literal with W
+                        self.REGS.WREG.* = self.REGS.WREG.* & @as(u8, @intCast(instruction & 0x00FF));
+                        std.debug.print("ANDLW 0x{x}\n", .{self.REGS.WREG.*});
+                        self.REGS.STATUS.*.Z = if (self.REGS.WREG.* == 0) 1 else 0;
+                        self.REGS.STATUS.*.N = if (self.REGS.WREG.* & 0x80 != 0) 1 else 0;
+                    },
                     0b1110 => { // MOVLW - Move Literal to W
                         self.REGS.WREG.* = @intCast(instruction & 0x00FF);
                         std.debug.print("MOVLW 0x{x}\n", .{self.REGS.WREG.*});
@@ -373,9 +385,31 @@ pub const PIC18 = struct {
                     else => return error.InvalidInstruction,
                 }
             },
+            0b0001 => {
+                const dest_in_ram = (nibble2 & 0b0010) == 0b10; // If ‘d’ is ‘0’, the result is stored in W. If ‘d’ is ‘1’, the result is stored back in the register ‘f’ (default).
+                const use_bsr = (nibble2 & 0b0001) == 1; // if 0 the result is saved to WREG, otherwise it is saved back in the same register (the purpose is to set the Zero status)
+                switch (nibble2 & 0b1100) {
+                    0b0100 => { // ANDWF - AND W with f
+                        std.debug.print("ANDWF use_bsr={} dest_in_ram={}  0x{x}\n", .{
+                            use_bsr,
+                            dest_in_ram,
+                            instruction & 0x00FF,
+                        });
+                        const val = try self.memRead(use_bsr, @intCast(instruction & 0x00FF)) & self.REGS.WREG.*;
+                        if (dest_in_ram) {
+                            try self.memWrite(use_bsr, @intCast(instruction & 0x00FF), val);
+                        } else {
+                            self.REGS.WREG.* = val;
+                        }
+                        self.REGS.STATUS.*.Z = if (val == 0) 1 else 0;
+                        self.REGS.STATUS.*.N = if (val & 0x80 != 0) 1 else 0;
+                    },
+                    else => return error.InvalidInstruction,
+                }
+            },
             0b0101 => {
-                const use_bsr = (nibble2 & 0b0001) == 1;
-                const dest_in_ram = (nibble2 & 0b0001) == 1; // if 0 the result is saved to WREG, otherwise it is saved back in the same register (the purpose is to set the Zero status)
+                const dest_in_ram = (nibble2 & 0b0010) == 0b10; // If ‘d’ is ‘0’, the result is stored in W. If ‘d’ is ‘1’, the result is stored back in the register ‘f’ (default).
+                const use_bsr = (nibble2 & 0b0001) == 1; // if 0 the result is saved to WREG, otherwise it is saved back in the same register (the purpose is to set the Zero status)
                 switch (nibble2 & 0b1100) {
                     0b0000 => { // MOVF
                         std.debug.print("MOVF use_bsr={} dest_in_ram={}  0x{x}\n", .{

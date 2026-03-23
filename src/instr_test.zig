@@ -286,42 +286,240 @@ test "CLRF instruction" {
 }
 
 test "MOVF instruction" {
-    // Four cases stacked: positive->W, zero->W, negative->f, zero->f
+    // Six cases covering both destinations and both addressing modes.
+    // d=0 → result to WREG, f must be unchanged.
+    // d=1 → result written back to f, WREG must be unchanged (sentinel check).
+    // a=0 → Access Bank. a=1 → BSR bank (MOVLB 3 → bank offset 0x300).
+    //
+    // Each d=0 case is preceded by MOVLW to poison WREG so we can see it change.
+    // Each d=1 case is preceded by MOVLW to load a sentinel we can verify is untouched.
     var pic = try asm2emu(
-        \\      MOVF 0x10, 0, 0
-        \\      MOVF 0x11, 0, 0
-        \\      MOVF 0x12, 1, 0
-        \\      MOVF 0x13, 1, 0
+        \\      MOVLW 0xFF
+        \\      MOVF 0x10, 0, 0    ; d=0 a=0: positive -> WREG
+        \\      MOVLW 0xBB
+        \\      MOVF 0x11, 1, 0    ; d=1 a=0: zero written back to f
+        \\      MOVLW 0x00
+        \\      MOVF 0x12, 0, 0    ; d=0 a=0: negative (MSb=1) -> WREG
+        \\      MOVLW 0xAA
+        \\      MOVF 0x13, 1, 0    ; d=1 a=0: non-zero written back to f
+        \\      MOVLB 3
+        \\      MOVLW 0x00
+        \\      MOVF 0x20, 0, 1    ; d=0 a=1: BSR bank 3, positive -> WREG
+        \\      MOVLW 0xCC
+        \\      MOVF 0x21, 1, 1    ; d=1 a=1: BSR bank 3, zero written back to f
         \\  END
     );
     defer pic.deinit();
-    pic.MEM[0x10] = 0x22;
+
+    // Access bank data (addr < 0x60 → bank 0)
+    pic.MEM[0x10] = 0x42;
     pic.MEM[0x11] = 0x00;
     pic.MEM[0x12] = 0x80;
-    pic.MEM[0x13] = 0x00;
+    pic.MEM[0x13] = 0x22;
+    // Bank 3 data
+    pic.MEM[0x320] = 0x77; // bank 3, addr 0x20
+    pic.MEM[0x321] = 0x00; // bank 3, addr 0x21
 
-    // Case 1: MOVF 0x10, 0 — positive value to WREG; Z=0 N=0
-    try pic.execInstruction();
-    try std.testing.expectEqual(0x22, pic.REGS.WREG.*);
+    // Case 1: d=0 a=0 — 0x42 -> WREG; f unchanged, Z=0 N=0
+    try pic.execInstruction(); // MOVLW 0xFF (poison)
+    try pic.execInstruction(); // MOVF 0x10, 0, 0
+    try std.testing.expectEqual(0x42, pic.REGS.WREG.*);
+    try std.testing.expectEqual(0x42, pic.MEM[0x10]); // f must not be modified
     try std.testing.expectEqual(0, pic.REGS.STATUS.*.Z);
     try std.testing.expectEqual(0, pic.REGS.STATUS.*.N);
 
-    // Case 2: MOVF 0x11, 0 — zero value to WREG; Z=1 N=0
-    try pic.execInstruction();
+    // Case 2: d=1 a=0 — 0x00 written back to f; WREG sentinel 0xBB unchanged, Z=1 N=0
+    try pic.execInstruction(); // MOVLW 0xBB (sentinel)
+    try pic.execInstruction(); // MOVF 0x11, 1, 0
+    try std.testing.expectEqual(0x00, pic.MEM[0x11]); // written back
+    try std.testing.expectEqual(0xBB, pic.REGS.WREG.*); // WREG untouched
+    try std.testing.expectEqual(1, pic.REGS.STATUS.*.Z);
+    try std.testing.expectEqual(0, pic.REGS.STATUS.*.N);
+
+    // Case 3: d=0 a=0 — 0x80 -> WREG; f unchanged, Z=0 N=1
+    try pic.execInstruction(); // MOVLW 0x00 (poison)
+    try pic.execInstruction(); // MOVF 0x12, 0, 0
+    try std.testing.expectEqual(0x80, pic.REGS.WREG.*);
+    try std.testing.expectEqual(0x80, pic.MEM[0x12]); // f must not be modified
+    try std.testing.expectEqual(0, pic.REGS.STATUS.*.Z);
+    try std.testing.expectEqual(1, pic.REGS.STATUS.*.N);
+
+    // Case 4: d=1 a=0 — 0x22 written back to f; WREG sentinel 0xAA unchanged, Z=0 N=0
+    try pic.execInstruction(); // MOVLW 0xAA (sentinel)
+    try pic.execInstruction(); // MOVF 0x13, 1, 0
+    try std.testing.expectEqual(0x22, pic.MEM[0x13]); // written back
+    try std.testing.expectEqual(0xAA, pic.REGS.WREG.*); // WREG untouched
+    try std.testing.expectEqual(0, pic.REGS.STATUS.*.Z);
+    try std.testing.expectEqual(0, pic.REGS.STATUS.*.N);
+
+    // Case 5: d=0 a=1 — BSR bank 3, addr 0x20: 0x77 -> WREG; f unchanged, Z=0 N=0
+    try pic.execInstruction(); // MOVLB 3
+    try std.testing.expectEqual(3, pic.REGS.BSR.*);
+    try pic.execInstruction(); // MOVLW 0x00 (poison)
+    try pic.execInstruction(); // MOVF 0x20, 0, 1
+    try std.testing.expectEqual(0x77, pic.REGS.WREG.*);
+    try std.testing.expectEqual(0x77, pic.MEM[0x320]); // f must not be modified
+    try std.testing.expectEqual(0, pic.REGS.STATUS.*.Z);
+    try std.testing.expectEqual(0, pic.REGS.STATUS.*.N);
+
+    // Case 6: d=1 a=1 — BSR bank 3, addr 0x21: 0x00 written back; WREG sentinel 0xCC unchanged, Z=1
+    try pic.execInstruction(); // MOVLW 0xCC (sentinel)
+    try pic.execInstruction(); // MOVF 0x21, 1, 1
+    try std.testing.expectEqual(0x00, pic.MEM[0x321]); // written back
+    try std.testing.expectEqual(0xCC, pic.REGS.WREG.*); // WREG untouched
+    try std.testing.expectEqual(1, pic.REGS.STATUS.*.Z);
+    try std.testing.expectEqual(0, pic.REGS.STATUS.*.N);
+
+    // Status Affected: N, Z
+}
+
+test "ANDWF instruction" {
+    var pic = try asm2emu(
+        \\      MOVLW 0x0F
+        \\      ANDWF 0x10, 0, 0   ; 0xAB & 0x0F = 0x0B -> WREG
+        \\      MOVLW 0x0F
+        \\      ANDWF 0x11, 1, 0   ; 0xF0 & 0x0F = 0x00 -> f, Z=1
+        \\      MOVLW 0x80
+        \\      ANDWF 0x12, 0, 0   ; 0xFF & 0x80 = 0x80 -> WREG, N=1
+        \\      MOVLW 0x3C
+        \\      ANDWF 0x13, 1, 0   ; 0x3C & 0x3C = 0x3C -> f
+        \\      MOVLB 4
+        \\      MOVLW 0xAA
+        \\      ANDWF 0x20, 0, 1   ; 0xF5 & 0xAA = 0xA0 -> WREG, BSR bank 4, N=1
+        \\      MOVLW 0x33
+        \\      ANDWF 0x21, 1, 1   ; 0x55 & 0x33 = 0x11 -> f, BSR bank 4
+        \\  END
+    );
+    defer pic.deinit();
+    pic.MEM[0x10] = 0xAB;
+    pic.MEM[0x11] = 0xF0;
+    pic.MEM[0x12] = 0xFF;
+    pic.MEM[0x13] = 0x3C;
+    pic.MEM[0x420] = 0xF5;
+    pic.MEM[0x421] = 0x55;
+
+    try pic.execInstruction(); // MOVLW 0x0F
+    try pic.execInstruction(); // ANDWF 0x10, 0, 0
+    try std.testing.expectEqual(0x0B, pic.REGS.WREG.*);
+    try std.testing.expectEqual(0xAB, pic.MEM[0x10]); // f unchanged
+    try std.testing.expectEqual(0, pic.REGS.STATUS.*.Z);
+    try std.testing.expectEqual(0, pic.REGS.STATUS.*.N);
+
+    try pic.execInstruction(); // MOVLW 0x0F
+    try pic.execInstruction(); // ANDWF 0x11, 1, 0
+    try std.testing.expectEqual(0x00, pic.MEM[0x11]);
+    try std.testing.expectEqual(0x0F, pic.REGS.WREG.*); // WREG unchanged
+    try std.testing.expectEqual(1, pic.REGS.STATUS.*.Z);
+    try std.testing.expectEqual(0, pic.REGS.STATUS.*.N);
+
+    try pic.execInstruction(); // MOVLW 0x80
+    try pic.execInstruction(); // ANDWF 0x12, 0, 0
+    try std.testing.expectEqual(0x80, pic.REGS.WREG.*);
+    try std.testing.expectEqual(0xFF, pic.MEM[0x12]); // f unchanged
+    try std.testing.expectEqual(0, pic.REGS.STATUS.*.Z);
+    try std.testing.expectEqual(1, pic.REGS.STATUS.*.N);
+
+    try pic.execInstruction(); // MOVLW 0x3C
+    try pic.execInstruction(); // ANDWF 0x13, 1, 0
+    try std.testing.expectEqual(0x3C, pic.MEM[0x13]);
+    try std.testing.expectEqual(0x3C, pic.REGS.WREG.*); // WREG unchanged
+
+    try pic.execInstruction(); // MOVLB 4
+    try std.testing.expectEqual(4, pic.REGS.BSR.*);
+    try pic.execInstruction(); // MOVLW 0xAA
+    try pic.execInstruction(); // ANDWF 0x20, 0, 1
+    try std.testing.expectEqual(0xA0, pic.REGS.WREG.*);
+    try std.testing.expectEqual(0xF5, pic.MEM[0x420]); // f unchanged
+    try std.testing.expectEqual(0, pic.REGS.STATUS.*.Z);
+    try std.testing.expectEqual(1, pic.REGS.STATUS.*.N);
+
+    try pic.execInstruction(); // MOVLW 0x33
+    try pic.execInstruction(); // ANDWF 0x21, 1, 1
+    try std.testing.expectEqual(0x11, pic.MEM[0x421]);
+    try std.testing.expectEqual(0x33, pic.REGS.WREG.*); // WREG unchanged
+    try std.testing.expectEqual(0, pic.REGS.STATUS.*.Z);
+    try std.testing.expectEqual(0, pic.REGS.STATUS.*.N);
+
+    // Status Affected: N, Z
+}
+
+test "IORLW instruction" {
+    var pic = try asm2emu(
+        \\      MOVLW 0x0F
+        \\      IORLW 0xA0   ; 0x0F | 0xA0 = 0xAF -> WREG, N=1
+        \\      MOVLW 0x00
+        \\      IORLW 0x00   ; 0x00 | 0x00 = 0x00 -> WREG, Z=1
+        \\      MOVLW 0x55
+        \\      IORLW 0xAA   ; 0x55 | 0xAA = 0xFF -> WREG, N=1
+        \\      MOVLW 0x0F
+        \\      IORLW 0x30   ; 0x0F | 0x30 = 0x3F -> WREG, N=0 Z=0
+        \\  END
+    );
+    defer pic.deinit();
+
+    try pic.execInstruction(); // MOVLW 0x0F
+    try pic.execInstruction(); // IORLW 0xA0
+    try std.testing.expectEqual(0xAF, pic.REGS.WREG.*);
+    try std.testing.expectEqual(0, pic.REGS.STATUS.*.Z);
+    try std.testing.expectEqual(1, pic.REGS.STATUS.*.N);
+
+    try pic.execInstruction(); // MOVLW 0x00
+    try pic.execInstruction(); // IORLW 0x00
     try std.testing.expectEqual(0x00, pic.REGS.WREG.*);
     try std.testing.expectEqual(1, pic.REGS.STATUS.*.Z);
     try std.testing.expectEqual(0, pic.REGS.STATUS.*.N);
 
-    // Case 3: MOVF 0x12, 1 — negative value (MSb=1) written back to f; Z=0 N=1
-    try pic.execInstruction();
-    try std.testing.expectEqual(0x80, pic.MEM[0x12]);
+    try pic.execInstruction(); // MOVLW 0x55
+    try pic.execInstruction(); // IORLW 0xAA
+    try std.testing.expectEqual(0xFF, pic.REGS.WREG.*);
     try std.testing.expectEqual(0, pic.REGS.STATUS.*.Z);
     try std.testing.expectEqual(1, pic.REGS.STATUS.*.N);
 
-    // Case 4: MOVF 0x13, 1 — zero written back to f; Z=1 N=0
-    try pic.execInstruction();
-    try std.testing.expectEqual(0x00, pic.MEM[0x13]);
+    try pic.execInstruction(); // MOVLW 0x0F
+    try pic.execInstruction(); // IORLW 0x30
+    try std.testing.expectEqual(0x3F, pic.REGS.WREG.*);
+    try std.testing.expectEqual(0, pic.REGS.STATUS.*.Z);
+    try std.testing.expectEqual(0, pic.REGS.STATUS.*.N);
+
+    // Status Affected: N, Z
+}
+
+test "ANDLW instruction" {
+    var pic = try asm2emu(
+        \\      MOVLW 0xAF
+        \\      ANDLW 0x0F   ; 0xAF & 0x0F = 0x0F -> WREG
+        \\      MOVLW 0xF0
+        \\      ANDLW 0x0F   ; 0xF0 & 0x0F = 0x00 -> WREG, Z=1
+        \\      MOVLW 0xFF
+        \\      ANDLW 0x80   ; 0xFF & 0x80 = 0x80 -> WREG, N=1
+        \\      MOVLW 0x3C
+        \\      ANDLW 0x3C   ; 0x3C & 0x3C = 0x3C -> WREG
+        \\  END
+    );
+    defer pic.deinit();
+
+    try pic.execInstruction(); // MOVLW 0xAF
+    try pic.execInstruction(); // ANDLW 0x0F
+    try std.testing.expectEqual(0x0F, pic.REGS.WREG.*);
+    try std.testing.expectEqual(0, pic.REGS.STATUS.*.Z);
+    try std.testing.expectEqual(0, pic.REGS.STATUS.*.N);
+
+    try pic.execInstruction(); // MOVLW 0xF0
+    try pic.execInstruction(); // ANDLW 0x0F
+    try std.testing.expectEqual(0x00, pic.REGS.WREG.*);
     try std.testing.expectEqual(1, pic.REGS.STATUS.*.Z);
+    try std.testing.expectEqual(0, pic.REGS.STATUS.*.N);
+
+    try pic.execInstruction(); // MOVLW 0xFF
+    try pic.execInstruction(); // ANDLW 0x80
+    try std.testing.expectEqual(0x80, pic.REGS.WREG.*);
+    try std.testing.expectEqual(0, pic.REGS.STATUS.*.Z);
+    try std.testing.expectEqual(1, pic.REGS.STATUS.*.N);
+
+    try pic.execInstruction(); // MOVLW 0x3C
+    try pic.execInstruction(); // ANDLW 0x3C
+    try std.testing.expectEqual(0x3C, pic.REGS.WREG.*);
+    try std.testing.expectEqual(0, pic.REGS.STATUS.*.Z);
     try std.testing.expectEqual(0, pic.REGS.STATUS.*.N);
 
     // Status Affected: N, Z
@@ -351,10 +549,10 @@ test "MOVLB instruction" {
 
     // Doc example: before BSR=02h (set by first MOVLB), after BSR=05h
     try pic.execInstruction();
-    try std.testing.expectEqual(0x02, pic.MEM[0xFE0]); // BSR = 0xFE0
+    try std.testing.expectEqual(0x02, pic.REGS.BSR.*);
 
     try pic.execInstruction();
-    try std.testing.expectEqual(0x05, pic.MEM[0xFE0]);
+    try std.testing.expectEqual(0x05, pic.REGS.BSR.*);
 
     // Status Affected: None
 }
@@ -427,28 +625,6 @@ test "TBLRD +* instruction (pre-increment)" {
 }
 
 test "CALL and RETURN instruction" {
-    // Call chain: main -> sub_a -> sub_b -> sub_c, then unwinds.
-    // Subroutines are deliberately shuffled (sub_c, sub_a, sub_b) so that
-    // fall-through execution (treating CALL/RETURN as NOPs) immediately hits
-    // sub_c's MOVLW 0x33 instead of sub_a's 0x11, failing the first WREG check.
-    //
-    // Layout (byte addresses):
-    //   0x00: CALL sub_a  (4 bytes, pushes TOS=0x04)
-    //   0x04: NOP         (return landing pad)
-    //   0x06: sub_c: MOVLW 0x33, RETURN                          <- fall-through trap
-    //   0x0A: sub_a: MOVLW 0x11, CALL sub_b (pushes 0x10), RETURN
-    //   0x12: sub_b: MOVLW 0x22, CALL sub_c (pushes 0x18), RETURN
-    //
-    // Execution (9 steps):
-    //   1  CALL sub_a          main   -> sub_a (0x0A)
-    //   2  MOVLW 0x11          sub_a, WREG=0x11
-    //   3  CALL sub_b          sub_a  -> sub_b (0x12)
-    //   4  MOVLW 0x22          sub_b, WREG=0x22
-    //   5  CALL sub_c          sub_b  -> sub_c (0x06)
-    //   6  MOVLW 0x33          sub_c, WREG=0x33
-    //   7  RETURN              sub_c  -> sub_b (lands on sub_b's RETURN at 0x18)
-    //   8  RETURN              sub_b  -> sub_a (lands on sub_a's RETURN at 0x10)
-    //   9  RETURN              sub_a  -> main  (lands at NOP, PC=0x04)
     var pic = try asm2emu(
         \\      CALL sub_a, 0
         \\      NOP
@@ -484,7 +660,7 @@ test "CALL and RETURN instruction" {
     try pic.execInstruction(); // RETURN from sub_a -> lands on NOP at 0x04
 
     try std.testing.expectEqual(0x33, pic.REGS.WREG.*); // unchanged through RETURNs
-    try std.testing.expectEqual(0x04, pic.PC);           // back in main after initial CALL
+    try std.testing.expectEqual(0x04, pic.PC); // back in main after initial CALL
 
     // Status Affected: None
 }
