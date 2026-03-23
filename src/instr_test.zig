@@ -425,3 +425,66 @@ test "TBLRD +* instruction (pre-increment)" {
 
     // Status Affected None
 }
+
+test "CALL and RETURN instruction" {
+    // Call chain: main -> sub_a -> sub_b -> sub_c, then unwinds.
+    // Subroutines are deliberately shuffled (sub_c, sub_a, sub_b) so that
+    // fall-through execution (treating CALL/RETURN as NOPs) immediately hits
+    // sub_c's MOVLW 0x33 instead of sub_a's 0x11, failing the first WREG check.
+    //
+    // Layout (byte addresses):
+    //   0x00: CALL sub_a  (4 bytes, pushes TOS=0x04)
+    //   0x04: NOP         (return landing pad)
+    //   0x06: sub_c: MOVLW 0x33, RETURN                          <- fall-through trap
+    //   0x0A: sub_a: MOVLW 0x11, CALL sub_b (pushes 0x10), RETURN
+    //   0x12: sub_b: MOVLW 0x22, CALL sub_c (pushes 0x18), RETURN
+    //
+    // Execution (9 steps):
+    //   1  CALL sub_a          main   -> sub_a (0x0A)
+    //   2  MOVLW 0x11          sub_a, WREG=0x11
+    //   3  CALL sub_b          sub_a  -> sub_b (0x12)
+    //   4  MOVLW 0x22          sub_b, WREG=0x22
+    //   5  CALL sub_c          sub_b  -> sub_c (0x06)
+    //   6  MOVLW 0x33          sub_c, WREG=0x33
+    //   7  RETURN              sub_c  -> sub_b (lands on sub_b's RETURN at 0x18)
+    //   8  RETURN              sub_b  -> sub_a (lands on sub_a's RETURN at 0x10)
+    //   9  RETURN              sub_a  -> main  (lands at NOP, PC=0x04)
+    var pic = try asm2emu(
+        \\      CALL sub_a, 0
+        \\      NOP
+        \\sub_c:
+        \\      MOVLW 0x33
+        \\      RETURN
+        \\sub_a:
+        \\      MOVLW 0x11
+        \\      CALL sub_b, 0
+        \\      RETURN
+        \\sub_b:
+        \\      MOVLW 0x22
+        \\      CALL sub_c, 0
+        \\      RETURN
+        \\  END
+    );
+    defer pic.deinit();
+
+    try pic.execInstruction(); // CALL sub_a
+    try pic.execInstruction(); // MOVLW 0x11
+    try std.testing.expectEqual(0x11, pic.REGS.WREG.*);
+
+    try pic.execInstruction(); // CALL sub_b
+    try pic.execInstruction(); // MOVLW 0x22
+    try std.testing.expectEqual(0x22, pic.REGS.WREG.*);
+
+    try pic.execInstruction(); // CALL sub_c
+    try pic.execInstruction(); // MOVLW 0x33
+    try std.testing.expectEqual(0x33, pic.REGS.WREG.*);
+
+    try pic.execInstruction(); // RETURN from sub_c -> lands on sub_b's RETURN
+    try pic.execInstruction(); // RETURN from sub_b -> lands on sub_a's RETURN
+    try pic.execInstruction(); // RETURN from sub_a -> lands on NOP at 0x04
+
+    try std.testing.expectEqual(0x33, pic.REGS.WREG.*); // unchanged through RETURNs
+    try std.testing.expectEqual(0x04, pic.PC);           // back in main after initial CALL
+
+    // Status Affected: None
+}

@@ -60,6 +60,9 @@ pub const PIC18 = struct {
 
         /// Bank select register
         BSR: *u8,
+
+        /// Top of stack pointer
+        STKPTR: *u8,
     };
 
     allocator: std.mem.Allocator,
@@ -71,8 +74,8 @@ pub const PIC18 = struct {
 
     // Registers
     PC: u21,
-
     REGS: RegAddrs,
+    STACK: [31]u21, // 31 levels of hardware stack
 
     pub fn init(allocator: std.mem.Allocator) PIC18 {
         // Allocate full 2Mbyte program memory space
@@ -91,6 +94,7 @@ pub const PIC18 = struct {
             .MEM = mem,
             .configuration_bytes = dci,
             .PC = 0,
+            .STACK = [_]u21{0} ** 31,
             .REGS = RegAddrs{
                 .TBLPTRH = &mem[0xFF7],
                 .TBLPTRL = &mem[0xFF6],
@@ -124,6 +128,7 @@ pub const PIC18 = struct {
                 .PLUSW2 = &mem[0xFDB],
 
                 .BSR = &mem[0xFE0],
+                .STKPTR = &mem[0xFFC],
             },
         };
         return pic;
@@ -291,32 +296,49 @@ pub const PIC18 = struct {
         std.debug.print("0x{x:0>4} INST: {b:0>16} (0x{x:0>4})\n", .{ self.PC - 2, instruction, instruction });
         const nibble1 = @as(u4, @intCast((instruction & 0xF000) >> 12));
         const nibble2 = @as(u4, @intCast((instruction & 0x0F00) >> 8));
+        const nibble3 = @as(u4, @intCast((instruction & 0x00F0) >> 4));
         switch (nibble1) {
             0b0000 => {
                 switch (nibble2) {
-                    0b0000 => { // TBLRD
-                        // supposedly the third nibble is 0000, but for some reason it is allowed to be non-zero
-                        const mm = instruction & 0x0003;
+                    0b0000 => {
+                        switch (nibble3) {
+                            0b0000 => { // TBLRD
 
-                        // todo implement pre-increment, post incrmement based on tbptr
-                        try self.check(self.REGS.TBLPTRU.* & 0xF0 == 0, "device config acces via tblptr not implemented", .{});
-                        var tblptr: u21 = (@as(u21, self.REGS.TBLPTRU.* & 0x0F) << 16) | (@as(u21, self.REGS.TBLPTRH.*) << 8) | @as(u21, self.REGS.TBLPTRL.*);
-                        if (mm == 3) {
-                            tblptr += 1;
+                                // supposedly the third nibble is 0000, but for some reason it is allowed to be non-zero
+                                const mm = instruction & 0x0003;
+
+                                // todo implement pre-increment, post incrmement based on tbptr
+                                try self.check(self.REGS.TBLPTRU.* & 0xF0 == 0, "device config acces via tblptr not implemented", .{});
+                                var tblptr: u21 = (@as(u21, self.REGS.TBLPTRU.* & 0x0F) << 16) | (@as(u21, self.REGS.TBLPTRH.*) << 8) | @as(u21, self.REGS.TBLPTRL.*);
+                                if (mm == 3) {
+                                    tblptr += 1;
+                                }
+                                std.debug.print("TBLRD mm={}, tblptr=0x{x}\n", .{ mm, tblptr });
+                                self.REGS.TBLAT.* = self.PROG[tblptr];
+                                if (mm == 1) {
+                                    tblptr += 1;
+                                } else if (mm == 2) {
+                                    tblptr -= 1;
+                                }
+                                // Write back TBLPTR
+                                self.REGS.TBLPTRU.* = @intCast((tblptr >> 16) & 0x0F);
+                                self.REGS.TBLPTRH.* = @intCast((tblptr >> 8) & 0xFF);
+                                self.REGS.TBLPTRL.* = @intCast(tblptr & 0xFF);
+                            },
+                            0b0001 => { // RETURN
+                                const use_shadow = instruction & 0x0001 == 1;
+                                try self.check(!use_shadow, "shadow registers not implemented", .{}); // TODO: implement this
+
+                                try self.check(self.REGS.STKPTR.* > 0, "stack underflow on RETURN", .{}); // TODO: implement stack underflow handling
+                                self.REGS.STKPTR.* -= 1;
+                                self.PC = self.STACK[self.REGS.STKPTR.*];
+
+                                std.debug.print("RETURN to 0x{x} (SP={})\n", .{ self.PC, self.REGS.STKPTR.* });
+                            },
+                            else => return error.InvalidInstruction,
                         }
-                        std.debug.print("TBLRD mm={}, tblptr=0x{x}\n", .{ mm, tblptr });
-                        self.REGS.TBLAT.* = self.PROG[tblptr];
-                        if (mm == 1) {
-                            tblptr += 1;
-                        } else if (mm == 2) {
-                            tblptr -= 1;
-                        }
-                        // Write back TBLPTR
-                        self.REGS.TBLPTRU.* = @intCast((tblptr >> 16) & 0x0F);
-                        self.REGS.TBLPTRH.* = @intCast((tblptr >> 8) & 0xFF);
-                        self.REGS.TBLPTRL.* = @intCast(tblptr & 0xFF);
                     },
-                    0b0001 => { // Move literal to BSR
+                    0b0001 => { // MOVLB Move literal to BSR
                         self.REGS.BSR.* = @intCast(instruction & 0x003F); // Load 6 bits only
                     },
                     0b0100, 0b0101, 0b0110, 0b0111 => { // DECF Decrement f
@@ -417,6 +439,17 @@ pub const PIC18 = struct {
                         }
                         std.debug.print("BNZ n={} Z={} -> PC=0x{x}\n", .{ n, self.REGS.STATUS.*.Z, self.PC });
                     },
+                    0b1100, 0b1101 => { // CALL - Call subroutine
+                        const use_shadow = (nibble2 & 0b0001) == 1;
+                        try self.check(!use_shadow, "shadow registers not implemented", .{}); // TODO: implement this
+                        const second_word = self.consumeProgWord();
+                        try self.check((second_word & 0xF000) >> 12 == 0b1111, "invalid CALL", .{});
+                        try self.check(self.REGS.STKPTR.* < self.STACK.len, "stack overflow not implemented", .{}); // TODO: implement stack overflow handling
+                        self.STACK[self.REGS.STKPTR.*] = self.PC;
+                        self.REGS.STKPTR.* += 1;
+                        std.debug.print("CALL to 0x{x} (PC=0x{x})\n", .{ self.PC, (@as(u21, second_word & 0x0FFF) << 9) | (@as(u21, instruction & 0x00FF) << 1) });
+                        self.PC = (@as(u21, second_word & 0x0FFF) << 9) | (@as(u21, instruction & 0x00FF) << 1);
+                    },
                     0b1110 => { // LFSR - Load FSR (File select register)
                         const FSR_num: u8 = @intCast((instruction & 0x00F0) >> 4);
                         try self.check(FSR_num <= 2, "FSR_num too big", .{});
@@ -473,6 +506,12 @@ pub fn main() !void {
             }
             std.debug.print("======PC hit 0x01b1ce! count={}\n", .{cnt});
         }
-        try pic.execInstruction();
+        pic.execInstruction() catch |err| {
+            // Dump memory to file
+            var out_file = try std.fs.cwd().createFile("dump.bin", .{ .truncate = true });
+            defer out_file.close();
+            try out_file.writeAll(pic.MEM);
+            return err;
+        };
     }
 }
