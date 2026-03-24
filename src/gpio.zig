@@ -7,14 +7,13 @@ pub const GPIOMode = enum {
     Output,
 };
 
-pub const GPIOPinVtable = struct {
-    setMode: *const fn (self: *GPIOPin, mode: GPIOMode) void,
-    read: *const fn (self: *GPIOPin) bool,
-    write: *const fn (self: *GPIOPin, value: bool) void,
-};
-
 pub const GPIOPin = struct {
-    vtable: *const GPIOPinVtable,
+    const VTable = struct {
+        setMode: *const fn (self: *GPIOPin, mode: GPIOMode) void,
+        read: *const fn (self: *GPIOPin) bool,
+        write: *const fn (self: *GPIOPin, value: bool) void,
+    };
+    vtable: *const VTable,
 
     pub fn setMode(self: *GPIOPin, mode: GPIOMode) void {
         self.vtable.setMode(self, mode);
