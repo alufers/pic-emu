@@ -6,3 +6,5 @@ build-*/
 docgen_tmp/
 .claude
 pilot.X.production.hex
+.gdb_history
+dump.bin

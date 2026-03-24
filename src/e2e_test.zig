@@ -52,6 +52,7 @@ test "writes GPIO pin" {
     var pic = try asm2emu(
         \\      CLRF PORTA, 0
         \\      BSF PORTA, 3
+        \\      BSF PORTD, 4
         \\  END
     );
     defer pic.deinit();
@@ -60,29 +61,40 @@ test "writes GPIO pin" {
         const Self = @This();
 
         val: bool = false,
-        vtable: gpio.GPIOPinVtable,
+        interface: gpio.GPIOPin,
 
         pub fn init() Self {
-            return Self{
-                .vtable = gpio.GPIOPinVtable{
+            return Self{ .interface = .{
+                .vtable = &.{
                     .write = Self.onWrite,
-                    .setMode = gpio.NOPGPIOPin.setMode,
-                    .read = gpio.NOPGPIOPin.read,
+                    .setMode = Self.onSetMode,
+                    .read = Self.onRead,
                 },
-            };
+            } };
         }
 
-        fn onWrite(vtab: *gpio.GPIOPinVtable, val: bool) void {
-            const self: *Self = @fieldParentPtr("vtable", vtab);
+        fn onWrite(pin: *gpio.GPIOPin, val: bool) void {
+            const self: *Self = @fieldParentPtr("interface", pin);
             self.val = val;
+        }
+        fn onSetMode(_: *gpio.GPIOPin, _: gpio.GPIOMode) void {
+            // No-op
+        }
+        fn onRead(_: *gpio.GPIOPin) bool {
+            return false;
         }
     };
 
-    var pin_handler = TestingGPIOPin.init();
-    pic.GPIOPortA.pins[3] = &pin_handler.vtable;
+    var pin_handler1 = TestingGPIOPin.init();
+    pic.GPIOPortA.pins[3] = &pin_handler1.interface;
+
+    var pin_handler2 = TestingGPIOPin.init();
+    pic.GPIOPortD.pins[4] = &pin_handler2.interface;
 
     try pic.execInstruction();
     try pic.execInstruction();
+    try pic.execInstruction();
 
-    try std.testing.expectEqual(true, pin_handler.val);
+    try std.testing.expectEqual(true, pin_handler1.val);
+    try std.testing.expectEqual(true, pin_handler2.val);
 }

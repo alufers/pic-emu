@@ -15,56 +15,82 @@ pub const PeripheralError = error{
 };
 
 pub const SpecialFunctionRegisterVTable = struct {
-    reset: ?*const fn (self: *SpecialFunctionRegisterVTable, pic: *PIC18, addr: u16) void = null,
-    read: *const fn (self: *SpecialFunctionRegisterVTable, pic: *PIC18, addr: u16) PeripheralError!u8,
-    write: *const fn (self: *SpecialFunctionRegisterVTable, pic: *PIC18, addr: u16, value: u8) PeripheralError!void,
+    reset: ?*const fn (self: *SpecialFunctionRegisterHandler, pic: *PIC18, addr: u16) void = null,
+    read: *const fn (self: *SpecialFunctionRegisterHandler, pic: *PIC18, addr: u16) PeripheralError!u8,
+    write: *const fn (self: *SpecialFunctionRegisterHandler, pic: *PIC18, addr: u16, value: u8) PeripheralError!void,
+};
+
+pub const SpecialFunctionRegisterHandler = struct {
+    vtable: *const SpecialFunctionRegisterVTable,
+
+    fn reset(self: *SpecialFunctionRegisterHandler, pic: *PIC18, addr: u16) void {
+        if (self.vtable.reset) |reset_fn| {
+            reset_fn(self, pic, addr);
+        }
+    }
+    fn read(self: *SpecialFunctionRegisterHandler, pic: *PIC18, addr: u16) PeripheralError!u8 {
+        return self.vtable.read(self, pic, addr);
+    }
+    fn write(self: *SpecialFunctionRegisterHandler, pic: *PIC18, addr: u16, value: u8) PeripheralError!void {
+        return self.vtable.write(self, pic, addr, value);
+    }
 };
 
 pub const PICGPIOPort = struct {
-    PORT_REG_HANDLER: SpecialFunctionRegisterVTable,
-    TRIS_REG_HANDLER: SpecialFunctionRegisterVTable,
-    LAT_REG_HANDLER: SpecialFunctionRegisterVTable,
+    PORT_REG_HANDLER: SpecialFunctionRegisterHandler,
+    TRIS_REG_HANDLER: SpecialFunctionRegisterHandler,
+    LAT_REG_HANDLER: SpecialFunctionRegisterHandler,
 
-    pins: [8]?*gpio.GPIOPinVtable,
+    pins: [8]?*gpio.GPIOPin,
 
     fn init() PICGPIOPort {
         return PICGPIOPort{
-            .PORT_REG_HANDLER = SpecialFunctionRegisterVTable{
-                .read = portRead,
-                .write = portWrite,
+            .PORT_REG_HANDLER = .{
+                .vtable = &.{
+                    .read = portRead,
+                    .write = portWrite,
+                },
             },
-            .TRIS_REG_HANDLER = SpecialFunctionRegisterVTable{
-                .reset = trisReset,
-                .read = trisRead,
-                .write = trisWrite,
+            .TRIS_REG_HANDLER = .{
+                .vtable = &.{
+                    .reset = trisReset,
+                    .read = trisRead,
+                    .write = trisWrite,
+                },
             },
-            .LAT_REG_HANDLER = SpecialFunctionRegisterVTable{
-                .read = latRead,
-                .write = portWrite,
+            .LAT_REG_HANDLER = .{
+                .vtable = &.{
+                    .read = latRead,
+                    .write = latWrite,
+                },
             },
 
-            .pins = [_]?*gpio.GPIOPinVtable{null} ** 8,
+            .pins = .{ null, null, null, null, null, null, null, null },
         };
     }
 
-    fn portWrite(sfrReg: *SpecialFunctionRegisterVTable, pic: *PIC18, addr: u16, value: u8) PeripheralError!void {
+    fn portWrite(sfrReg: *SpecialFunctionRegisterHandler, pic: *PIC18, addr: u16, value: u8) PeripheralError!void {
         const self: *PICGPIOPort = @alignCast(@fieldParentPtr("PORT_REG_HANDLER", sfrReg));
         for (self.pins, 0..) |pin, idx| {
             if (pin) |p| {
-                p.write(p, (value & (@as(u8, 1) << @intCast(idx))) != 0);
+                p.write((value & (@as(u8, 1) << @intCast(idx))) != 0);
             }
         }
 
         // Write the value to memory anyway for readout of unconnected pins
         pic.MEM[addr] = value;
     }
-    fn portRead(sfrReg: *SpecialFunctionRegisterVTable, pic: *PIC18, addr: u16) PeripheralError!u8 {
+    fn latWrite(sfrReg: *SpecialFunctionRegisterHandler, pic: *PIC18, addr: u16, value: u8) PeripheralError!void {
+        const self: *PICGPIOPort = @alignCast(@fieldParentPtr("LAT_REG_HANDLER", sfrReg));
+        return try self.PORT_REG_HANDLER.write(pic, addr, value);
+    }
+    fn portRead(sfrReg: *SpecialFunctionRegisterHandler, pic: *PIC18, addr: u16) PeripheralError!u8 {
         const self: *PICGPIOPort = @alignCast(@fieldParentPtr("PORT_REG_HANDLER", sfrReg));
         const mem_val = pic.MEM[addr];
         var result: u8 = 0;
         for (self.pins, 0..) |pin, idx| {
             if (pin) |p| {
-                if (p.read(p)) {
+                if (p.read()) {
                     result |= @as(u8, 1) << @intCast(idx);
                 }
             } else {
@@ -77,25 +103,25 @@ pub const PICGPIOPort = struct {
         return 0;
     }
 
-    fn trisReset(_: *SpecialFunctionRegisterVTable, pic: *PIC18, addr: u16) void {
+    fn trisReset(_: *SpecialFunctionRegisterHandler, pic: *PIC18, addr: u16) void {
         pic.MEM[addr] = 0xFF; // default to all inputs
     }
 
-    fn trisWrite(sfrReg: *SpecialFunctionRegisterVTable, pic: *PIC18, addr: u16, value: u8) PeripheralError!void {
-        const self: *PICGPIOPort = @alignCast(@fieldParentPtr("PORT_REG_HANDLER", sfrReg));
+    fn trisWrite(sfrReg: *SpecialFunctionRegisterHandler, pic: *PIC18, addr: u16, value: u8) PeripheralError!void {
+        const self: *PICGPIOPort = @alignCast(@fieldParentPtr("TRIS_REG_HANDLER", sfrReg));
         for (0..8) |idx| {
             const direction = if ((value & (@as(u8, 1) << @intCast(idx))) != 0) gpio.GPIOMode.Input else gpio.GPIOMode.Output;
             if (self.pins[idx]) |p| {
-                p.setMode(p, direction);
+                p.setMode(direction);
             }
         }
         pic.MEM[addr] = value;
     }
-    fn trisRead(_: *SpecialFunctionRegisterVTable, pic: *PIC18, addr: u16) PeripheralError!u8 {
+    fn trisRead(_: *SpecialFunctionRegisterHandler, pic: *PIC18, addr: u16) PeripheralError!u8 {
         return pic.MEM[addr];
     }
 
-    fn latRead(_: *SpecialFunctionRegisterVTable, pic: *PIC18, addr: u16) PeripheralError!u8 {
+    fn latRead(_: *SpecialFunctionRegisterHandler, pic: *PIC18, addr: u16) PeripheralError!u8 {
         return pic.MEM[addr];
     }
 };
@@ -169,9 +195,15 @@ pub const PIC18 = struct {
 
     /// Maps to memory addresses from 0xF00 to 0xFFF,
     /// If Some, read/write to this register is handled by the vtable, otherwise it is direct memory access
-    SFRHandlers: [256]?*SpecialFunctionRegisterVTable,
+    SFRHandlers: [256]?*SpecialFunctionRegisterHandler,
 
     GPIOPortA: PICGPIOPort,
+    GPIOPortB: PICGPIOPort,
+    GPIOPortC: PICGPIOPort,
+    GPIOPortD: PICGPIOPort,
+    GPIOPortE: PICGPIOPort,
+    GPIOPortF: PICGPIOPort,
+    GPIOPortG: PICGPIOPort,
 
     pub fn init(allocator: std.mem.Allocator) *PIC18 {
         // Allocate full 2Mbyte program memory space
@@ -193,7 +225,7 @@ pub const PIC18 = struct {
         pic.configuration_bytes = dci;
         pic.PC = 0;
         pic.STACK = [_]u21{0} ** 31;
-        pic.SFRHandlers = [_]?*SpecialFunctionRegisterVTable{null} ** 256;
+        pic.SFRHandlers = [_]?*SpecialFunctionRegisterHandler{null} ** 256;
         pic.REGS = RegAddrs{
             .TBLPTRH = &mem[0xFF7],
             .TBLPTRL = &mem[0xFF6],
@@ -230,17 +262,45 @@ pub const PIC18 = struct {
             .STKPTR = &mem[0xFFC],
         };
         pic.GPIOPortA = PICGPIOPort.init();
+        pic.GPIOPortB = PICGPIOPort.init();
+        pic.GPIOPortC = PICGPIOPort.init();
+        pic.GPIOPortD = PICGPIOPort.init();
+        pic.GPIOPortE = PICGPIOPort.init();
+        pic.GPIOPortF = PICGPIOPort.init();
+        pic.GPIOPortG = PICGPIOPort.init();
 
         pic.SFRHandlers[0xF80 - 0xF00] = &pic.GPIOPortA.PORT_REG_HANDLER;
         pic.SFRHandlers[0xF92 - 0xF00] = &pic.GPIOPortA.TRIS_REG_HANDLER;
         pic.SFRHandlers[0xF89 - 0xF00] = &pic.GPIOPortA.LAT_REG_HANDLER;
 
+        pic.SFRHandlers[0xF81 - 0xF00] = &pic.GPIOPortB.PORT_REG_HANDLER;
+        pic.SFRHandlers[0xF93 - 0xF00] = &pic.GPIOPortB.TRIS_REG_HANDLER;
+        pic.SFRHandlers[0xF8A - 0xF00] = &pic.GPIOPortB.LAT_REG_HANDLER;
+
+        pic.SFRHandlers[0xF82 - 0xF00] = &pic.GPIOPortC.PORT_REG_HANDLER;
+        pic.SFRHandlers[0xF94 - 0xF00] = &pic.GPIOPortC.TRIS_REG_HANDLER;
+        pic.SFRHandlers[0xF8B - 0xF00] = &pic.GPIOPortC.LAT_REG_HANDLER;
+
+        pic.SFRHandlers[0xF83 - 0xF00] = &pic.GPIOPortD.PORT_REG_HANDLER;
+        pic.SFRHandlers[0xF95 - 0xF00] = &pic.GPIOPortD.TRIS_REG_HANDLER;
+        pic.SFRHandlers[0xF8C - 0xF00] = &pic.GPIOPortD.LAT_REG_HANDLER;
+
+        pic.SFRHandlers[0xF84 - 0xF00] = &pic.GPIOPortE.PORT_REG_HANDLER;
+        pic.SFRHandlers[0xF96 - 0xF00] = &pic.GPIOPortE.TRIS_REG_HANDLER;
+        pic.SFRHandlers[0xF8D - 0xF00] = &pic.GPIOPortE.LAT_REG_HANDLER;
+
+        pic.SFRHandlers[0xF85 - 0xF00] = &pic.GPIOPortF.PORT_REG_HANDLER;
+        pic.SFRHandlers[0xF97 - 0xF00] = &pic.GPIOPortF.TRIS_REG_HANDLER;
+        pic.SFRHandlers[0xF8E - 0xF00] = &pic.GPIOPortF.LAT_REG_HANDLER;
+
+        pic.SFRHandlers[0xF86 - 0xF00] = &pic.GPIOPortG.PORT_REG_HANDLER;
+        pic.SFRHandlers[0xF98 - 0xF00] = &pic.GPIOPortG.TRIS_REG_HANDLER;
+        pic.SFRHandlers[0xF8F - 0xF00] = &pic.GPIOPortG.LAT_REG_HANDLER;
+
         // Reset SFR handlers
         for (pic.SFRHandlers, 0..) |handler, offset| {
             if (handler) |h| {
-                if (h.reset) |reset_fn| {
-                    reset_fn(h, pic, 0xF00 + @as(u16, @intCast(offset)));
-                }
+                h.reset(pic, 0xF00 + @as(u16, @intCast(offset)));
             }
         }
         return pic;
@@ -371,7 +431,7 @@ pub const PIC18 = struct {
     fn memRead(self: *PIC18, full_addr: u16) !u8 {
         if (full_addr >= 0xF00) {
             if (self.SFRHandlers[full_addr - 0xF00]) |handler| {
-                return try handler.read(handler, self, full_addr);
+                return try handler.read(self, full_addr);
             }
         }
         return self.MEM[full_addr];
@@ -380,7 +440,7 @@ pub const PIC18 = struct {
     fn memWrite(self: *PIC18, full_addr: u16, val: u8) !void {
         if (full_addr >= 0xF00) {
             if (self.SFRHandlers[full_addr - 0xF00]) |handler| {
-                try handler.write(handler, self, full_addr, val);
+                try handler.write(self, full_addr, val);
                 return;
             }
         }
@@ -730,6 +790,10 @@ pub fn main() !void {
 
     var pic = PIC18.init(allocator);
     try pic.loadRom(&rdr.interface);
+
+    var spi_cs_pin = gpio.LoggingGPIOPin.init("A.5 [FLASH_CS]");
+
+    pic.GPIOPortA.pins[5] = &spi_cs_pin.interface;
 
     var cnt: u32 = 0;
     for (0..9999) |_| {
