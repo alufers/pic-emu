@@ -570,6 +570,89 @@ pub const PIC18 = struct {
                     else => return error.InvalidInstruction,
                 }
             },
+            0b0010 => {
+                const dest_in_ram = (nibble2 & 0b0010) == 0b10;
+                const use_bsr = (nibble2 & 0b0001) == 1;
+                switch (nibble2 & 0b1100) {
+                    0b1000 => { // INCF - Increment f
+                        std.debug.print("INCF use_bsr={} dest_in_ram={}  0x{x}\n", .{
+                            use_bsr,
+                            dest_in_ram,
+                            instruction & 0x00FF,
+                        });
+                        const f = try self.memReadBanked(use_bsr, @intCast(instruction & 0x00FF));
+                        const val = f +% 1;
+                        if (dest_in_ram) {
+                            try self.memWriteBanked(use_bsr, @intCast(instruction & 0x00FF), val);
+                        } else {
+                            self.REGS.WREG.* = val;
+                        }
+                        self.REGS.STATUS.*.Z = if (val == 0) 1 else 0;
+                        self.REGS.STATUS.*.N = if (val & 0x80 != 0) 1 else 0;
+                        self.REGS.STATUS.*.C = if (f == 0xFF) 1 else 0;
+                        self.REGS.STATUS.*.DC = if ((f & 0x0F) == 0x0F) 1 else 0;
+                        self.REGS.STATUS.*.OV = if (f == 0x7F) 1 else 0;
+                    },
+                    0b1100 => { // DECFSZ - Decrement f, Skip if 0
+                        std.debug.print("DECFSZ use_bsr={} dest_in_ram={}  0x{x}\n", .{
+                            use_bsr,
+                            dest_in_ram,
+                            instruction & 0x00FF,
+                        });
+                        const val = try self.memReadBanked(use_bsr, @intCast(instruction & 0x00FF)) -% 1;
+                        if (dest_in_ram) {
+                            try self.memWriteBanked(use_bsr, @intCast(instruction & 0x00FF), val);
+                        } else {
+                            self.REGS.WREG.* = val;
+                        }
+                        if (val == 0) self.PC += 2; // skip next instruction
+                    },
+                    else => return error.InvalidInstruction,
+                }
+            },
+            0b0011 => {
+                const dest_in_ram = (nibble2 & 0b0010) == 0b10;
+                const use_bsr = (nibble2 & 0b0001) == 1;
+                switch (nibble2 & 0b1100) {
+                    0b0000 => { // RRCF - Rotate Right f through Carry
+                        std.debug.print("RRCF use_bsr={} dest_in_ram={}  0x{x}\n", .{
+                            use_bsr,
+                            dest_in_ram,
+                            instruction & 0x00FF,
+                        });
+                        const f = try self.memReadBanked(use_bsr, @intCast(instruction & 0x00FF));
+                        const old_carry: u8 = self.REGS.STATUS.*.C;
+                        const val: u8 = (f >> 1) | (old_carry << 7);
+                        self.REGS.STATUS.*.C = @intCast(f & 1);
+                        self.REGS.STATUS.*.Z = if (val == 0) 1 else 0;
+                        self.REGS.STATUS.*.N = if (val & 0x80 != 0) 1 else 0;
+                        if (dest_in_ram) {
+                            try self.memWriteBanked(use_bsr, @intCast(instruction & 0x00FF), val);
+                        } else {
+                            self.REGS.WREG.* = val;
+                        }
+                    },
+                    0b0100 => { // RLCF - Rotate Left f through Carry
+                        std.debug.print("RLCF use_bsr={} dest_in_ram={}  0x{x}\n", .{
+                            use_bsr,
+                            dest_in_ram,
+                            instruction & 0x00FF,
+                        });
+                        const f = try self.memReadBanked(use_bsr, @intCast(instruction & 0x00FF));
+                        const old_carry: u8 = self.REGS.STATUS.*.C;
+                        const val: u8 = (f << 1) | old_carry;
+                        self.REGS.STATUS.*.C = @intCast((f >> 7) & 1);
+                        self.REGS.STATUS.*.Z = if (val == 0) 1 else 0;
+                        self.REGS.STATUS.*.N = if (val & 0x80 != 0) 1 else 0;
+                        if (dest_in_ram) {
+                            try self.memWriteBanked(use_bsr, @intCast(instruction & 0x00FF), val);
+                        } else {
+                            self.REGS.WREG.* = val;
+                        }
+                    },
+                    else => return error.InvalidInstruction,
+                }
+            },
             0b0101 => {
                 const dest_in_ram = (nibble2 & 0b0010) == 0b10; // If ‘d’ is ‘0’, the result is stored in W. If ‘d’ is ‘1’, the result is stored back in the register ‘f’ (default).
                 const use_bsr = (nibble2 & 0b0001) == 1; // if 0 the result is saved to WREG, otherwise it is saved back in the same register (the purpose is to set the Zero status)
@@ -588,6 +671,26 @@ pub const PIC18 = struct {
                         }
                         self.REGS.STATUS.*.Z = if (val == 0) 1 else 0;
                         self.REGS.STATUS.*.N = if (val & 0x80 != 0) 1 else 0;
+                    },
+                    0b1100 => { // SUBWF - Subtract W from f
+                        std.debug.print("SUBWF use_bsr={} dest_in_ram={}  0x{x}\n", .{
+                            use_bsr,
+                            dest_in_ram,
+                            instruction & 0x00FF,
+                        });
+                        const f = try self.memReadBanked(use_bsr, @intCast(instruction & 0x00FF));
+                        const w = self.REGS.WREG.*;
+                        const val = f -% w;
+                        if (dest_in_ram) {
+                            try self.memWriteBanked(use_bsr, @intCast(instruction & 0x00FF), val);
+                        } else {
+                            self.REGS.WREG.* = val;
+                        }
+                        self.REGS.STATUS.*.Z = if (val == 0) 1 else 0;
+                        self.REGS.STATUS.*.N = if (val & 0x80 != 0) 1 else 0;
+                        self.REGS.STATUS.*.C = if (f >= w) 1 else 0;
+                        self.REGS.STATUS.*.DC = if ((f & 0x0F) >= (w & 0x0F)) 1 else 0;
+                        self.REGS.STATUS.*.OV = if (((f ^ w) & (f ^ val) & 0x80) != 0) 1 else 0;
                     },
                     else => return error.InvalidInstruction,
                 }
@@ -692,6 +795,13 @@ pub const PIC18 = struct {
                             self.PC = @intCast(@as(i32, @intCast(self.PC)) + 2 * @as(i32, n));
                         }
                         std.debug.print("BNZ n={} Z={} -> PC=0x{x}\n", .{ n, self.REGS.STATUS.*.Z, self.PC });
+                    },
+                    0b0011 => { // BNC - Branch if Not Carry
+                        const n: i8 = @bitCast(@as(u8, @intCast(instruction & 0x00FF)));
+                        if (self.REGS.STATUS.*.C == 0) {
+                            self.PC = @intCast(@as(i32, @intCast(self.PC)) + 2 * @as(i32, n));
+                        }
+                        std.debug.print("BNC n={} C={} -> PC=0x{x}\n", .{ n, self.REGS.STATUS.*.C, self.PC });
                     },
                     0b1100, 0b1101 => { // CALL - Call subroutine
                         const use_shadow = (nibble2 & 0b0001) == 1;
