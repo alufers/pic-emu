@@ -91,6 +91,9 @@ pub const PIC18 = struct {
 
         /// Top of stack pointer
         STKPTR: *u8,
+
+        PRODL: *u8,
+        PRODH: *u8,
     };
 
     allocator: std.mem.Allocator,
@@ -174,6 +177,9 @@ pub const PIC18 = struct {
 
             .BSR = &mem[0xFE0],
             .STKPTR = &mem[0xFFC],
+
+            .PRODL = &mem[0xFF3],
+            .PRODH = &mem[0xFF4],
         };
         pic.MSSP1 = PICMSSP.init();
         pic.MSSP2 = PICMSSP.init();
@@ -467,6 +473,13 @@ pub const PIC18 = struct {
                     0b0001 => { // MOVLB Move literal to BSR
                         self.REGS.BSR.* = @intCast(instruction & 0x003F); // Load 6 bits only
                     },
+                    0b1101 => { // MULLW - Multiply Literal with W
+                        const k: u16 = instruction & 0x00FF;
+                        const result: u16 = @as(u16, self.REGS.WREG.*) * k;
+                        self.REGS.PRODH.* = @intCast(result >> 8);
+                        self.REGS.PRODL.* = @intCast(result & 0xFF);
+                        std.debug.print("MULLW 0x{x} -> PRODH=0x{x} PRODL=0x{x}\n", .{ k, self.REGS.PRODH.*, self.REGS.PRODL.* });
+                    },
                     0b0100, 0b0101, 0b0110, 0b0111 => { // DECF Decrement f
 
                         // Status Affected C, DC, N, OV, Z
@@ -574,6 +587,47 @@ pub const PIC18 = struct {
                 const dest_in_ram = (nibble2 & 0b0010) == 0b10;
                 const use_bsr = (nibble2 & 0b0001) == 1;
                 switch (nibble2 & 0b1100) {
+                    0b0000 => { // ADDWFC - Add W and Carry to f
+                        std.debug.print("ADDWFC use_bsr={} dest_in_ram={}  0x{x}\n", .{
+                            use_bsr,
+                            dest_in_ram,
+                            instruction & 0x00FF,
+                        });
+                        const f = try self.memReadBanked(use_bsr, @intCast(instruction & 0x00FF));
+                        const w = self.REGS.WREG.*;
+                        const c: u8 = self.REGS.STATUS.*.C;
+                        const val = f +% w +% c;
+                        if (dest_in_ram) {
+                            try self.memWriteBanked(use_bsr, @intCast(instruction & 0x00FF), val);
+                        } else {
+                            self.REGS.WREG.* = val;
+                        }
+                        self.REGS.STATUS.*.Z = if (val == 0) 1 else 0;
+                        self.REGS.STATUS.*.N = if (val & 0x80 != 0) 1 else 0;
+                        self.REGS.STATUS.*.C = if (@as(u16, f) + @as(u16, w) + @as(u16, c) > 0xFF) 1 else 0;
+                        self.REGS.STATUS.*.DC = if ((@as(u16, f & 0x0F) + @as(u16, w & 0x0F) + @as(u16, c)) > 0x0F) 1 else 0;
+                        self.REGS.STATUS.*.OV = if (((~(f ^ w)) & (f ^ val) & 0x80) != 0) 1 else 0;
+                    },
+                    0b0100 => { // ADDWF - Add W to f
+                        std.debug.print("ADDWF use_bsr={} dest_in_ram={}  0x{x}\n", .{
+                            use_bsr,
+                            dest_in_ram,
+                            instruction & 0x00FF,
+                        });
+                        const f = try self.memReadBanked(use_bsr, @intCast(instruction & 0x00FF));
+                        const w = self.REGS.WREG.*;
+                        const val = f +% w;
+                        if (dest_in_ram) {
+                            try self.memWriteBanked(use_bsr, @intCast(instruction & 0x00FF), val);
+                        } else {
+                            self.REGS.WREG.* = val;
+                        }
+                        self.REGS.STATUS.*.Z = if (val == 0) 1 else 0;
+                        self.REGS.STATUS.*.N = if (val & 0x80 != 0) 1 else 0;
+                        self.REGS.STATUS.*.C = if (@as(u16, f) + @as(u16, w) > 0xFF) 1 else 0;
+                        self.REGS.STATUS.*.DC = if ((@as(u16, f & 0x0F) + @as(u16, w & 0x0F)) > 0x0F) 1 else 0;
+                        self.REGS.STATUS.*.OV = if (((~(f ^ w)) & (f ^ val) & 0x80) != 0) 1 else 0;
+                    },
                     0b1000 => { // INCF - Increment f
                         std.debug.print("INCF use_bsr={} dest_in_ram={}  0x{x}\n", .{
                             use_bsr,
@@ -650,6 +704,43 @@ pub const PIC18 = struct {
                             self.REGS.WREG.* = val;
                         }
                     },
+                    0b1000 => { // SWAPF - Swap nibbles of f
+                        std.debug.print("SWAPF use_bsr={} dest_in_ram={}  0x{x}\n", .{
+                            use_bsr,
+                            dest_in_ram,
+                            instruction & 0x00FF,
+                        });
+                        const f = try self.memReadBanked(use_bsr, @intCast(instruction & 0x00FF));
+                        const val: u8 = (f << 4) | (f >> 4);
+                        if (dest_in_ram) {
+                            try self.memWriteBanked(use_bsr, @intCast(instruction & 0x00FF), val);
+                        } else {
+                            self.REGS.WREG.* = val;
+                        }
+                    },
+                    else => return error.InvalidInstruction,
+                }
+            },
+            0b0100 => {
+                const dest_in_ram = (nibble2 & 0b0010) == 0b10;
+                const use_bsr = (nibble2 & 0b0001) == 1;
+                switch (nibble2 & 0b1100) {
+                    0b0100 => { // RLNCF - Rotate Left f (No Carry)
+                        std.debug.print("RLNCF use_bsr={} dest_in_ram={}  0x{x}\n", .{
+                            use_bsr,
+                            dest_in_ram,
+                            instruction & 0x00FF,
+                        });
+                        const f = try self.memReadBanked(use_bsr, @intCast(instruction & 0x00FF));
+                        const val: u8 = (f << 1) | (f >> 7);
+                        self.REGS.STATUS.*.Z = if (val == 0) 1 else 0;
+                        self.REGS.STATUS.*.N = if (val & 0x80 != 0) 1 else 0;
+                        if (dest_in_ram) {
+                            try self.memWriteBanked(use_bsr, @intCast(instruction & 0x00FF), val);
+                        } else {
+                            self.REGS.WREG.* = val;
+                        }
+                    },
                     else => return error.InvalidInstruction,
                 }
             },
@@ -671,6 +762,28 @@ pub const PIC18 = struct {
                         }
                         self.REGS.STATUS.*.Z = if (val == 0) 1 else 0;
                         self.REGS.STATUS.*.N = if (val & 0x80 != 0) 1 else 0;
+                    },
+                    0b1000 => { // SUBWFB - Subtract W from f with Borrow
+                        std.debug.print("SUBWFB use_bsr={} dest_in_ram={}  0x{x}\n", .{
+                            use_bsr,
+                            dest_in_ram,
+                            instruction & 0x00FF,
+                        });
+                        const f = try self.memReadBanked(use_bsr, @intCast(instruction & 0x00FF));
+                        const w = self.REGS.WREG.*;
+                        const borrow: u8 = 1 - self.REGS.STATUS.*.C; // C=1 means no borrow
+                        const full: i16 = @as(i16, f) - @as(i16, w) - @as(i16, borrow);
+                        const val: u8 = @truncate(@as(u16, @bitCast(full)));
+                        if (dest_in_ram) {
+                            try self.memWriteBanked(use_bsr, @intCast(instruction & 0x00FF), val);
+                        } else {
+                            self.REGS.WREG.* = val;
+                        }
+                        self.REGS.STATUS.*.Z = if (val == 0) 1 else 0;
+                        self.REGS.STATUS.*.N = if (val & 0x80 != 0) 1 else 0;
+                        self.REGS.STATUS.*.C = if (full >= 0) 1 else 0;
+                        self.REGS.STATUS.*.DC = if ((@as(i16, f & 0x0F) - @as(i16, w & 0x0F) - @as(i16, borrow)) >= 0) 1 else 0;
+                        self.REGS.STATUS.*.OV = if (((f ^ w) & (f ^ val) & 0x80) != 0) 1 else 0;
                     },
                     0b1100 => { // SUBWF - Subtract W from f
                         std.debug.print("SUBWF use_bsr={} dest_in_ram={}  0x{x}\n", .{
@@ -796,6 +909,13 @@ pub const PIC18 = struct {
                         }
                         std.debug.print("BNZ n={} Z={} -> PC=0x{x}\n", .{ n, self.REGS.STATUS.*.Z, self.PC });
                     },
+                    0b0010 => { // BC - Branch if Carry
+                        const n: i8 = @bitCast(@as(u8, @intCast(instruction & 0x00FF)));
+                        if (self.REGS.STATUS.*.C == 1) {
+                            self.PC = @intCast(@as(i32, @intCast(self.PC)) + 2 * @as(i32, n));
+                        }
+                        std.debug.print("BC n={} C={} -> PC=0x{x}\n", .{ n, self.REGS.STATUS.*.C, self.PC });
+                    },
                     0b0011 => { // BNC - Branch if Not Carry
                         const n: i8 = @bitCast(@as(u8, @intCast(instruction & 0x00FF)));
                         if (self.REGS.STATUS.*.C == 0) {
@@ -867,7 +987,7 @@ pub fn main() !void {
     pic.GPIOPortA.pins[5] = &spi_cs_pin.interface;
 
     var cnt: u32 = 0;
-    for (0..9999) |_| {
+    for (0..20_000) |_| {
         if (pic.PC == 0x01b1ce) {
             cnt += 1;
             if (cnt == 1) {
