@@ -552,6 +552,21 @@ pub const PIC18 = struct {
                         self.REGS.STATUS.*.Z = if (val == 0) 1 else 0;
                         self.REGS.STATUS.*.N = if (val & 0x80 != 0) 1 else 0;
                     },
+                    0b1000 => { // XORWF - Exclusive OR W with f
+                        std.debug.print("XORWF use_bsr={} dest_in_ram={}  0x{x}\n", .{
+                            use_bsr,
+                            dest_in_ram,
+                            instruction & 0x00FF,
+                        });
+                        const val = try self.memReadBanked(use_bsr, @intCast(instruction & 0x00FF)) ^ self.REGS.WREG.*;
+                        if (dest_in_ram) {
+                            try self.memWriteBanked(use_bsr, @intCast(instruction & 0x00FF), val);
+                        } else {
+                            self.REGS.WREG.* = val;
+                        }
+                        self.REGS.STATUS.*.Z = if (val == 0) 1 else 0;
+                        self.REGS.STATUS.*.N = if (val & 0x80 != 0) 1 else 0;
+                    },
                     else => return error.InvalidInstruction,
                 }
             },
@@ -603,6 +618,16 @@ pub const PIC18 = struct {
                 const val = try self.memReadBanked(use_bsr, @intCast(instruction & 0x00FF)) | (@as(u8, 1) << bit_num);
                 try self.memWriteBanked(use_bsr, @intCast(instruction & 0x00FF), val);
             },
+            0b1010 => { // BTFSS - Bit Test File, Skip if Set
+                const bit_num: u3 = @intCast((nibble2 & 0b1110) >> 1);
+                const use_bsr = (nibble2 & 0b0001) == 1;
+                std.debug.print("BTFSS bit_num={} use_bsr={} 0x{x}\n", .{ bit_num, use_bsr, instruction & 0x00FF });
+                const val = try self.memReadBanked(use_bsr, @intCast(instruction & 0x00FF));
+                if ((val & (@as(u8, 1) << bit_num)) != 0) {
+                    self.PC += 2; // skip next instruction
+                    std.debug.print("BTFSS skipping next instruction because bit is set\n", .{});
+                }
+            },
             0b1011 => { // BTFSC - Bit Test File, Skip if Clear
                 const bit_num: u3 = @intCast((nibble2 & 0b1110) >> 1);
                 const use_bsr = (nibble2 & 0b0001) == 1;
@@ -613,6 +638,7 @@ pub const PIC18 = struct {
                     std.debug.print("BTFSC skipping next instruction because bit is clear\n", .{});
                 }
             },
+
             0b1001 => { // BCF Bit Clear f
                 const bit_num: u3 = @intCast((nibble2 & 0b1110) >> 1);
                 const use_bsr = (nibble2 & 0b0001) == 1;
@@ -653,6 +679,13 @@ pub const PIC18 = struct {
             },
             0b1110 => {
                 switch (nibble2) {
+                    0b0000 => { // BZ - Branch if Zero
+                        const n: i8 = @bitCast(@as(u8, @intCast(instruction & 0x00FF)));
+                        if (self.REGS.STATUS.*.Z == 1) {
+                            self.PC = @intCast(@as(i32, @intCast(self.PC)) + 2 * @as(i32, n));
+                        }
+                        std.debug.print("BZ n={} Z={} -> PC=0x{x}\n", .{ n, self.REGS.STATUS.*.Z, self.PC });
+                    },
                     0b0001 => { // BNZ - Branch if Not Zero
                         const n: i8 = @bitCast(@as(u8, @intCast(instruction & 0x00FF)));
                         if (self.REGS.STATUS.*.Z == 0) {

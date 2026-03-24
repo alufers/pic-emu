@@ -182,6 +182,40 @@ test "BTFSC instruction" {
     // Status Affected: None
 }
 
+test "BTFSS instruction" {
+    var pic = try asm2emu(
+        \\      BTFSS 0x10, 3, 0   ; bit 3 of 0x08 = 1 -> skip
+        \\      MOVLW 0xFF         ; trap
+        \\      MOVLW 0x11         ; WREG = 0x11 (skip happened)
+        \\      BTFSS 0x11, 3, 0   ; bit 3 of 0x00 = 0 -> no skip
+        \\      MOVLW 0x22         ; WREG = 0x22 (no skip)
+        \\      MOVLB 5
+        \\      BTFSS 0x20, 7, 1   ; bit 7 of MEM[0x520]=0x80 = 1 -> skip, BSR bank 5
+        \\      MOVLW 0xFF         ; trap
+        \\      MOVLW 0x44         ; WREG = 0x44 (skip happened)
+        \\  END
+    );
+    defer pic.deinit();
+    pic.MEM[0x10] = 0x08; // bit 3 = 1 -> skip
+    pic.MEM[0x11] = 0x00; // bit 3 = 0 -> no skip
+    pic.MEM[0x520] = 0x80; // bit 7 = 1 -> skip
+
+    try pic.execInstruction(); // BTFSS 0x10, 3 -> skip
+    try pic.execInstruction(); // MOVLW 0x11
+    try std.testing.expectEqual(0x11, pic.REGS.WREG.*);
+
+    try pic.execInstruction(); // BTFSS 0x11, 3 -> no skip
+    try pic.execInstruction(); // MOVLW 0x22
+    try std.testing.expectEqual(0x22, pic.REGS.WREG.*);
+
+    try pic.execInstruction(); // MOVLB 5
+    try pic.execInstruction(); // BTFSS 0x20, 7, 1 -> skip
+    try pic.execInstruction(); // MOVLW 0x44
+    try std.testing.expectEqual(0x44, pic.REGS.WREG.*);
+
+    // Status Affected: None
+}
+
 test "DECF instruction" {
     // Six cases covering both destinations and all status bits.
     // PIC18 carry convention for subtraction: C=1 no borrow, C=0 borrow.
@@ -285,6 +319,42 @@ test "BNZ instruction - branch not taken (Z=1)" {
     );
     defer pic.deinit();
     pic.REGS.STATUS.*.Z = 1;
+    try pic.execInstruction();
+
+    try std.testing.expectEqual(2, pic.PC);
+
+    // Status Affected: None
+}
+
+test "BZ instruction - branch taken (Z=1)" {
+    var pic = try asm2emu(
+        \\      BZ skip
+        \\      NOP
+        \\      NOP
+        \\skip
+        \\      NOP
+        \\  END
+    );
+    defer pic.deinit();
+    pic.REGS.STATUS.*.Z = 1;
+    try pic.execInstruction();
+
+    try std.testing.expectEqual(6, pic.PC);
+
+    // Status Affected: None
+}
+
+test "BZ instruction - branch not taken (Z=0)" {
+    var pic = try asm2emu(
+        \\      BZ skip
+        \\      NOP
+        \\      NOP
+        \\skip
+        \\      NOP
+        \\  END
+    );
+    defer pic.deinit();
+    pic.REGS.STATUS.*.Z = 0;
     try pic.execInstruction();
 
     try std.testing.expectEqual(2, pic.PC);
@@ -696,6 +766,76 @@ test "IORWF instruction" {
     try std.testing.expectEqual(0x01, pic.REGS.WREG.*); // WREG unchanged
     try std.testing.expectEqual(0, pic.REGS.STATUS.*.Z);
     try std.testing.expectEqual(1, pic.REGS.STATUS.*.N);
+
+    // Status Affected: N, Z
+}
+
+test "XORWF instruction" {
+    var pic = try asm2emu(
+        \\      MOVLW 0xFF
+        \\      XORWF 0x10, 0, 0   ; 0xAA ^ 0xFF = 0x55 -> WREG
+        \\      MOVLW 0xAA
+        \\      XORWF 0x11, 1, 0   ; 0xAA ^ 0xAA = 0x00 -> f, Z=1
+        \\      MOVLW 0x0F
+        \\      XORWF 0x12, 0, 0   ; 0x7F ^ 0x0F = 0x70 -> WREG
+        \\      MOVLW 0x01
+        \\      XORWF 0x13, 1, 0   ; 0x80 ^ 0x01 = 0x81 -> f, N=1
+        \\      MOVLB 6
+        \\      MOVLW 0xF0
+        \\      XORWF 0x20, 0, 1   ; 0x3C ^ 0xF0 = 0xCC -> WREG, BSR bank 6, N=1
+        \\      MOVLW 0x55
+        \\      XORWF 0x21, 1, 1   ; 0x55 ^ 0x55 = 0x00 -> f, BSR bank 6, Z=1
+        \\  END
+    );
+    defer pic.deinit();
+    pic.MEM[0x10] = 0xAA;
+    pic.MEM[0x11] = 0xAA;
+    pic.MEM[0x12] = 0x7F;
+    pic.MEM[0x13] = 0x80;
+    pic.MEM[0x620] = 0x3C;
+    pic.MEM[0x621] = 0x55;
+
+    try pic.execInstruction(); // MOVLW 0xFF
+    try pic.execInstruction(); // XORWF 0x10, 0, 0
+    try std.testing.expectEqual(0x55, pic.REGS.WREG.*);
+    try std.testing.expectEqual(0xAA, pic.MEM[0x10]); // f unchanged
+    try std.testing.expectEqual(0, pic.REGS.STATUS.*.Z);
+    try std.testing.expectEqual(0, pic.REGS.STATUS.*.N);
+
+    try pic.execInstruction(); // MOVLW 0xAA
+    try pic.execInstruction(); // XORWF 0x11, 1, 0
+    try std.testing.expectEqual(0x00, pic.MEM[0x11]);
+    try std.testing.expectEqual(0xAA, pic.REGS.WREG.*); // WREG unchanged
+    try std.testing.expectEqual(1, pic.REGS.STATUS.*.Z);
+    try std.testing.expectEqual(0, pic.REGS.STATUS.*.N);
+
+    try pic.execInstruction(); // MOVLW 0x0F
+    try pic.execInstruction(); // XORWF 0x12, 0, 0
+    try std.testing.expectEqual(0x70, pic.REGS.WREG.*);
+    try std.testing.expectEqual(0x7F, pic.MEM[0x12]); // f unchanged
+
+    try pic.execInstruction(); // MOVLW 0x01
+    try pic.execInstruction(); // XORWF 0x13, 1, 0
+    try std.testing.expectEqual(0x81, pic.MEM[0x13]);
+    try std.testing.expectEqual(0x01, pic.REGS.WREG.*); // WREG unchanged
+    try std.testing.expectEqual(0, pic.REGS.STATUS.*.Z);
+    try std.testing.expectEqual(1, pic.REGS.STATUS.*.N);
+
+    try pic.execInstruction(); // MOVLB 6
+    try std.testing.expectEqual(6, pic.REGS.BSR.*);
+    try pic.execInstruction(); // MOVLW 0xF0
+    try pic.execInstruction(); // XORWF 0x20, 0, 1
+    try std.testing.expectEqual(0xCC, pic.REGS.WREG.*);
+    try std.testing.expectEqual(0x3C, pic.MEM[0x620]); // f unchanged
+    try std.testing.expectEqual(0, pic.REGS.STATUS.*.Z);
+    try std.testing.expectEqual(1, pic.REGS.STATUS.*.N);
+
+    try pic.execInstruction(); // MOVLW 0x55
+    try pic.execInstruction(); // XORWF 0x21, 1, 1
+    try std.testing.expectEqual(0x00, pic.MEM[0x621]);
+    try std.testing.expectEqual(0x55, pic.REGS.WREG.*); // WREG unchanged
+    try std.testing.expectEqual(1, pic.REGS.STATUS.*.Z);
+    try std.testing.expectEqual(0, pic.REGS.STATUS.*.N);
 
     // Status Affected: N, Z
 }
