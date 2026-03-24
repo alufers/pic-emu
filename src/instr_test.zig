@@ -630,6 +630,76 @@ test "IORLW instruction" {
     // Status Affected: N, Z
 }
 
+test "IORWF instruction" {
+    var pic = try asm2emu(
+        \\      MOVLW 0x0F
+        \\      IORWF 0x10, 0, 0   ; 0xA0 | 0x0F = 0xAF -> WREG, N=1
+        \\      MOVLW 0x00
+        \\      IORWF 0x11, 1, 0   ; 0x00 | 0x00 = 0x00 -> f, Z=1
+        \\      MOVLW 0xF0
+        \\      IORWF 0x12, 0, 0   ; 0x0F | 0xF0 = 0xFF -> WREG, N=1
+        \\      MOVLW 0x11
+        \\      IORWF 0x13, 1, 0   ; 0x22 | 0x11 = 0x33 -> f
+        \\      MOVLB 3
+        \\      MOVLW 0x0F
+        \\      IORWF 0x20, 0, 1   ; 0x50 | 0x0F = 0x5F -> WREG, BSR bank 3
+        \\      MOVLW 0x01
+        \\      IORWF 0x21, 1, 1   ; 0x80 | 0x01 = 0x81 -> f, BSR bank 3, N=1
+        \\  END
+    );
+    defer pic.deinit();
+    pic.MEM[0x10] = 0xA0;
+    pic.MEM[0x11] = 0x00;
+    pic.MEM[0x12] = 0x0F;
+    pic.MEM[0x13] = 0x22;
+    pic.MEM[0x320] = 0x50;
+    pic.MEM[0x321] = 0x80;
+
+    try pic.execInstruction(); // MOVLW 0x0F
+    try pic.execInstruction(); // IORWF 0x10, 0, 0
+    try std.testing.expectEqual(0xAF, pic.REGS.WREG.*);
+    try std.testing.expectEqual(0xA0, pic.MEM[0x10]); // f unchanged
+    try std.testing.expectEqual(0, pic.REGS.STATUS.*.Z);
+    try std.testing.expectEqual(1, pic.REGS.STATUS.*.N);
+
+    try pic.execInstruction(); // MOVLW 0x00
+    try pic.execInstruction(); // IORWF 0x11, 1, 0
+    try std.testing.expectEqual(0x00, pic.MEM[0x11]);
+    try std.testing.expectEqual(0x00, pic.REGS.WREG.*); // WREG unchanged
+    try std.testing.expectEqual(1, pic.REGS.STATUS.*.Z);
+    try std.testing.expectEqual(0, pic.REGS.STATUS.*.N);
+
+    try pic.execInstruction(); // MOVLW 0xF0
+    try pic.execInstruction(); // IORWF 0x12, 0, 0
+    try std.testing.expectEqual(0xFF, pic.REGS.WREG.*);
+    try std.testing.expectEqual(0x0F, pic.MEM[0x12]); // f unchanged
+    try std.testing.expectEqual(0, pic.REGS.STATUS.*.Z);
+    try std.testing.expectEqual(1, pic.REGS.STATUS.*.N);
+
+    try pic.execInstruction(); // MOVLW 0x11
+    try pic.execInstruction(); // IORWF 0x13, 1, 0
+    try std.testing.expectEqual(0x33, pic.MEM[0x13]);
+    try std.testing.expectEqual(0x11, pic.REGS.WREG.*); // WREG unchanged
+
+    try pic.execInstruction(); // MOVLB 3
+    try std.testing.expectEqual(3, pic.REGS.BSR.*);
+    try pic.execInstruction(); // MOVLW 0x0F
+    try pic.execInstruction(); // IORWF 0x20, 0, 1
+    try std.testing.expectEqual(0x5F, pic.REGS.WREG.*);
+    try std.testing.expectEqual(0x50, pic.MEM[0x320]); // f unchanged
+    try std.testing.expectEqual(0, pic.REGS.STATUS.*.Z);
+    try std.testing.expectEqual(0, pic.REGS.STATUS.*.N);
+
+    try pic.execInstruction(); // MOVLW 0x01
+    try pic.execInstruction(); // IORWF 0x21, 1, 1
+    try std.testing.expectEqual(0x81, pic.MEM[0x321]);
+    try std.testing.expectEqual(0x01, pic.REGS.WREG.*); // WREG unchanged
+    try std.testing.expectEqual(0, pic.REGS.STATUS.*.Z);
+    try std.testing.expectEqual(1, pic.REGS.STATUS.*.N);
+
+    // Status Affected: N, Z
+}
+
 test "ANDLW instruction" {
     var pic = try asm2emu(
         \\      MOVLW 0xAF

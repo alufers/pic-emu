@@ -1,5 +1,6 @@
 const std = @import("std");
 const ihex = @import("ihex.zig");
+const gpio = @import("gpio.zig");
 
 test {
     _ = @import("instr_test.zig");
@@ -8,7 +9,96 @@ test {
 
 const readInt = std.mem.readInt;
 
-// TODO: move regs into memory (WREG, FSR)
+pub const PeripheralError = error{
+    ReadProhibited,
+    WriteProhibited,
+};
+
+pub const SpecialFunctionRegisterVTable = struct {
+    reset: ?*const fn (self: *SpecialFunctionRegisterVTable, pic: *PIC18, addr: u16) void = null,
+    read: *const fn (self: *SpecialFunctionRegisterVTable, pic: *PIC18, addr: u16) PeripheralError!u8,
+    write: *const fn (self: *SpecialFunctionRegisterVTable, pic: *PIC18, addr: u16, value: u8) PeripheralError!void,
+};
+
+pub const PICGPIOPort = struct {
+    PORT_REG_HANDLER: SpecialFunctionRegisterVTable,
+    TRIS_REG_HANDLER: SpecialFunctionRegisterVTable,
+    LAT_REG_HANDLER: SpecialFunctionRegisterVTable,
+
+    pins: [8]?*gpio.GPIOPinVtable,
+
+    fn init() PICGPIOPort {
+        return PICGPIOPort{
+            .PORT_REG_HANDLER = SpecialFunctionRegisterVTable{
+                .read = portRead,
+                .write = portWrite,
+            },
+            .TRIS_REG_HANDLER = SpecialFunctionRegisterVTable{
+                .reset = trisReset,
+                .read = trisRead,
+                .write = trisWrite,
+            },
+            .LAT_REG_HANDLER = SpecialFunctionRegisterVTable{
+                .read = latRead,
+                .write = portWrite,
+            },
+
+            .pins = [_]?*gpio.GPIOPinVtable{null} ** 8,
+        };
+    }
+
+    fn portWrite(sfrReg: *SpecialFunctionRegisterVTable, pic: *PIC18, addr: u16, value: u8) PeripheralError!void {
+        const self: *PICGPIOPort = @alignCast(@fieldParentPtr("PORT_REG_HANDLER", sfrReg));
+        for (self.pins, 0..) |pin, idx| {
+            if (pin) |p| {
+                p.write(p, (value & (@as(u8, 1) << @intCast(idx))) != 0);
+            }
+        }
+
+        // Write the value to memory anyway for readout of unconnected pins
+        pic.MEM[addr] = value;
+    }
+    fn portRead(sfrReg: *SpecialFunctionRegisterVTable, pic: *PIC18, addr: u16) PeripheralError!u8 {
+        const self: *PICGPIOPort = @alignCast(@fieldParentPtr("PORT_REG_HANDLER", sfrReg));
+        const mem_val = pic.MEM[addr];
+        var result: u8 = 0;
+        for (self.pins, 0..) |pin, idx| {
+            if (pin) |p| {
+                if (p.read(p)) {
+                    result |= @as(u8, 1) << @intCast(idx);
+                }
+            } else {
+                // If pin not connected, read from memory
+                if ((mem_val & (@as(u8, 1) << @intCast(idx))) != 0) {
+                    result |= @as(u8, 1) << @intCast(idx);
+                }
+            }
+        }
+        return 0;
+    }
+
+    fn trisReset(_: *SpecialFunctionRegisterVTable, pic: *PIC18, addr: u16) void {
+        pic.MEM[addr] = 0xFF; // default to all inputs
+    }
+
+    fn trisWrite(sfrReg: *SpecialFunctionRegisterVTable, pic: *PIC18, addr: u16, value: u8) PeripheralError!void {
+        const self: *PICGPIOPort = @alignCast(@fieldParentPtr("PORT_REG_HANDLER", sfrReg));
+        for (0..8) |idx| {
+            const direction = if ((value & (@as(u8, 1) << @intCast(idx))) != 0) gpio.GPIOMode.Input else gpio.GPIOMode.Output;
+            if (self.pins[idx]) |p| {
+                p.setMode(p, direction);
+            }
+        }
+        pic.MEM[addr] = value;
+    }
+    fn trisRead(_: *SpecialFunctionRegisterVTable, pic: *PIC18, addr: u16) PeripheralError!u8 {
+        return pic.MEM[addr];
+    }
+
+    fn latRead(_: *SpecialFunctionRegisterVTable, pic: *PIC18, addr: u16) PeripheralError!u8 {
+        return pic.MEM[addr];
+    }
+};
 
 pub const PIC18 = struct {
     /// https://onlinedocs.microchip.com/oxy/GUID-0C48BD90-048C-4F4F-9800-5D5269497C89-en-US-3/GUID-06A816BE-05BC-452E-AE33-7D4FD59DE5FD.html#GUID-06A816BE-05BC-452E-AE33-7D4FD59DE5FD
@@ -77,7 +167,13 @@ pub const PIC18 = struct {
     REGS: RegAddrs,
     STACK: [31]u21, // 31 levels of hardware stack
 
-    pub fn init(allocator: std.mem.Allocator) PIC18 {
+    /// Maps to memory addresses from 0xF00 to 0xFFF,
+    /// If Some, read/write to this register is handled by the vtable, otherwise it is direct memory access
+    SFRHandlers: [256]?*SpecialFunctionRegisterVTable,
+
+    GPIOPortA: PICGPIOPort,
+
+    pub fn init(allocator: std.mem.Allocator) *PIC18 {
         // Allocate full 2Mbyte program memory space
         const prog = allocator.alloc(u8, 2 * 1024 * 1024) catch unreachable;
         @memset(prog, 0);
@@ -88,49 +184,65 @@ pub const PIC18 = struct {
 
         const mem = allocator.alloc(u8, 256 * 16) catch unreachable; // PIC18F67K22 has 16 banks each,  256 bytes
         @memset(mem, 0);
-        const pic = PIC18{
-            .allocator = allocator,
-            .PROG = prog,
-            .MEM = mem,
-            .configuration_bytes = dci,
-            .PC = 0,
-            .STACK = [_]u21{0} ** 31,
-            .REGS = RegAddrs{
-                .TBLPTRH = &mem[0xFF7],
-                .TBLPTRL = &mem[0xFF6],
-                .TBLPTRU = &mem[0xFF8],
-                .TBLAT = &mem[0xFF5],
-                .WREG = &mem[0xFE8],
-                .FSR0L = &mem[0xFE9],
-                .FSR0H = &mem[0xFEA],
-                .FSR1L = &mem[0xFE1],
-                .FSR1H = &mem[0xFE2],
-                .FSR2L = &mem[0xFD9],
-                .FSR2H = &mem[0xFDA],
-                .STATUS = @ptrCast(&mem[0xFD8]),
 
-                .INDF0 = &mem[0xFEF],
-                .POSTINC0 = &mem[0xFEE],
-                .POSTDEC0 = &mem[0xFED],
-                .PREINC0 = &mem[0xFEC],
-                .PLUSW0 = &mem[0xFEB],
+        var pic = allocator.create(PIC18) catch unreachable;
 
-                .INDF1 = &mem[0xFE7],
-                .POSTINC1 = &mem[0xFE6],
-                .POSTDEC1 = &mem[0xFE5],
-                .PREINC1 = &mem[0xFE4],
-                .PLUSW1 = &mem[0xFE3],
+        pic.allocator = allocator;
+        pic.PROG = prog;
+        pic.MEM = mem;
+        pic.configuration_bytes = dci;
+        pic.PC = 0;
+        pic.STACK = [_]u21{0} ** 31;
+        pic.SFRHandlers = [_]?*SpecialFunctionRegisterVTable{null} ** 256;
+        pic.REGS = RegAddrs{
+            .TBLPTRH = &mem[0xFF7],
+            .TBLPTRL = &mem[0xFF6],
+            .TBLPTRU = &mem[0xFF8],
+            .TBLAT = &mem[0xFF5],
+            .WREG = &mem[0xFE8],
+            .FSR0L = &mem[0xFE9],
+            .FSR0H = &mem[0xFEA],
+            .FSR1L = &mem[0xFE1],
+            .FSR1H = &mem[0xFE2],
+            .FSR2L = &mem[0xFD9],
+            .FSR2H = &mem[0xFDA],
+            .STATUS = @ptrCast(&mem[0xFD8]),
 
-                .INDF2 = &mem[0xFDF],
-                .POSTINC2 = &mem[0xFDE],
-                .POSTDEC2 = &mem[0xFDD],
-                .PREINC2 = &mem[0xFDC],
-                .PLUSW2 = &mem[0xFDB],
+            .INDF0 = &mem[0xFEF],
+            .POSTINC0 = &mem[0xFEE],
+            .POSTDEC0 = &mem[0xFED],
+            .PREINC0 = &mem[0xFEC],
+            .PLUSW0 = &mem[0xFEB],
 
-                .BSR = &mem[0xFE0],
-                .STKPTR = &mem[0xFFC],
-            },
+            .INDF1 = &mem[0xFE7],
+            .POSTINC1 = &mem[0xFE6],
+            .POSTDEC1 = &mem[0xFE5],
+            .PREINC1 = &mem[0xFE4],
+            .PLUSW1 = &mem[0xFE3],
+
+            .INDF2 = &mem[0xFDF],
+            .POSTINC2 = &mem[0xFDE],
+            .POSTDEC2 = &mem[0xFDD],
+            .PREINC2 = &mem[0xFDC],
+            .PLUSW2 = &mem[0xFDB],
+
+            .BSR = &mem[0xFE0],
+            .STKPTR = &mem[0xFFC],
         };
+        pic.GPIOPortA = PICGPIOPort.init();
+
+        pic.SFRHandlers[0xF80 - 0xF00] = &pic.GPIOPortA.PORT_REG_HANDLER;
+        pic.SFRHandlers[0xF92 - 0xF00] = &pic.GPIOPortA.TRIS_REG_HANDLER;
+        pic.SFRHandlers[0xF89 - 0xF00] = &pic.GPIOPortA.LAT_REG_HANDLER;
+
+        // Reset SFR handlers
+        for (pic.SFRHandlers, 0..) |handler, offset| {
+            if (handler) |h| {
+                if (h.reset) |reset_fn| {
+                    reset_fn(h, pic, 0xF00 + @as(u16, @intCast(offset)));
+                }
+            }
+        }
         return pic;
     }
 
@@ -246,14 +358,34 @@ pub const PIC18 = struct {
         return full_addr;
     }
 
-    fn memWrite(self: *PIC18, use_bsr: bool, addr: u8, val: u8) !void {
+    fn memWriteBanked(self: *PIC18, use_bsr: bool, addr: u8, val: u8) !void {
         const full_addr = try self.resolveIndirect(try self.accessBankFullAddr(use_bsr, addr));
-        self.MEM[full_addr] = val;
+        try self.memWrite(full_addr, val);
     }
 
-    fn memRead(self: *PIC18, use_bsr: bool, addr: u8) !u8 {
+    fn memReadBanked(self: *PIC18, use_bsr: bool, addr: u8) !u8 {
         const full_addr = try self.resolveIndirect(try self.accessBankFullAddr(use_bsr, addr));
+        return self.memRead(full_addr);
+    }
+
+    fn memRead(self: *PIC18, full_addr: u16) !u8 {
+        if (full_addr >= 0xF00) {
+            if (self.SFRHandlers[full_addr - 0xF00]) |handler| {
+                return try handler.read(handler, self, full_addr);
+            }
+        }
         return self.MEM[full_addr];
+    }
+
+    fn memWrite(self: *PIC18, full_addr: u16, val: u8) !void {
+        if (full_addr >= 0xF00) {
+            if (self.SFRHandlers[full_addr - 0xF00]) |handler| {
+                try handler.write(handler, self, full_addr, val);
+                return;
+            }
+        }
+
+        self.MEM[full_addr] = val;
     }
 
     fn setFSR(self: *PIC18, FSR_num: u8, val: u16) !void {
@@ -359,10 +491,10 @@ pub const PIC18 = struct {
                             dest_in_ram,
                             instruction & 0x00FF,
                         });
-                        const val = try self.memRead(use_bsr, @intCast(instruction & 0x00FF)) -% 1;
+                        const val = try self.memReadBanked(use_bsr, @intCast(instruction & 0x00FF)) -% 1;
 
                         if (dest_in_ram) {
-                            try self.memWrite(use_bsr, @intCast(instruction & 0x00FF), val);
+                            try self.memWriteBanked(use_bsr, @intCast(instruction & 0x00FF), val);
                         } else {
                             self.REGS.WREG.* = val;
                         }
@@ -402,15 +534,30 @@ pub const PIC18 = struct {
                 const dest_in_ram = (nibble2 & 0b0010) == 0b10; // If ‘d’ is ‘0’, the result is stored in W. If ‘d’ is ‘1’, the result is stored back in the register ‘f’ (default).
                 const use_bsr = (nibble2 & 0b0001) == 1; // if 0 the result is saved to WREG, otherwise it is saved back in the same register (the purpose is to set the Zero status)
                 switch (nibble2 & 0b1100) {
+                    0b0000 => { // IORWF - Inclusive OR W with f
+                        std.debug.print("IORWF use_bsr={} dest_in_ram={}  0x{x}\n", .{
+                            use_bsr,
+                            dest_in_ram,
+                            instruction & 0x00FF,
+                        });
+                        const val = try self.memReadBanked(use_bsr, @intCast(instruction & 0x00FF)) | self.REGS.WREG.*;
+                        if (dest_in_ram) {
+                            try self.memWriteBanked(use_bsr, @intCast(instruction & 0x00FF), val);
+                        } else {
+                            self.REGS.WREG.* = val;
+                        }
+                        self.REGS.STATUS.*.Z = if (val == 0) 1 else 0;
+                        self.REGS.STATUS.*.N = if (val & 0x80 != 0) 1 else 0;
+                    },
                     0b0100 => { // ANDWF - AND W with f
                         std.debug.print("ANDWF use_bsr={} dest_in_ram={}  0x{x}\n", .{
                             use_bsr,
                             dest_in_ram,
                             instruction & 0x00FF,
                         });
-                        const val = try self.memRead(use_bsr, @intCast(instruction & 0x00FF)) & self.REGS.WREG.*;
+                        const val = try self.memReadBanked(use_bsr, @intCast(instruction & 0x00FF)) & self.REGS.WREG.*;
                         if (dest_in_ram) {
-                            try self.memWrite(use_bsr, @intCast(instruction & 0x00FF), val);
+                            try self.memWriteBanked(use_bsr, @intCast(instruction & 0x00FF), val);
                         } else {
                             self.REGS.WREG.* = val;
                         }
@@ -430,9 +577,9 @@ pub const PIC18 = struct {
                             dest_in_ram,
                             instruction & 0x00FF,
                         });
-                        const val = try self.memRead(use_bsr, @intCast(instruction & 0x00FF));
+                        const val = try self.memReadBanked(use_bsr, @intCast(instruction & 0x00FF));
                         if (dest_in_ram) {
-                            try self.memWrite(use_bsr, @intCast(instruction & 0x00FF), val);
+                            try self.memWriteBanked(use_bsr, @intCast(instruction & 0x00FF), val);
                         } else {
                             self.REGS.WREG.* = val;
                         }
@@ -447,16 +594,16 @@ pub const PIC18 = struct {
                 switch (nibble2 & 0b1110) {
                     0b1000 => { // SETF - Set f (to all ones)
                         std.debug.print("SETF 0x{x}\n", .{instruction & 0x00FF});
-                        try self.memWrite(use_bsr, @intCast(instruction & 0x00FF), 0xFF);
+                        try self.memWriteBanked(use_bsr, @intCast(instruction & 0x00FF), 0xFF);
                     },
                     0b1010 => { // CLRF Clear register f
                         std.debug.print("CLRF 0x{x}\n", .{instruction & 0x00FF});
-                        try self.memWrite(use_bsr, @intCast(instruction & 0x00FF), 0);
+                        try self.memWriteBanked(use_bsr, @intCast(instruction & 0x00FF), 0);
                         self.REGS.STATUS.*.Z = 1;
                     },
                     0b1110 => { // MOVWF Move W to f
                         std.debug.print("MOVWF 0x{x}\n", .{instruction & 0x00FF});
-                        try self.memWrite(use_bsr, @intCast(instruction & 0x00FF), self.REGS.WREG.*);
+                        try self.memWriteBanked(use_bsr, @intCast(instruction & 0x00FF), self.REGS.WREG.*);
                     },
                     else => return error.InvalidInstruction,
                 }
@@ -465,14 +612,14 @@ pub const PIC18 = struct {
                 const bit_num: u3 = @intCast((nibble2 & 0b1110) >> 1);
                 const use_bsr = (nibble2 & 0b0001) == 1;
                 std.debug.print("BSF bit_num={} use_bsr={} 0x{x}\n", .{ bit_num, use_bsr, instruction & 0x00FF });
-                const val = try self.memRead(use_bsr, @intCast(instruction & 0x00FF)) | (@as(u8, 1) << bit_num);
-                try self.memWrite(use_bsr, @intCast(instruction & 0x00FF), val);
+                const val = try self.memReadBanked(use_bsr, @intCast(instruction & 0x00FF)) | (@as(u8, 1) << bit_num);
+                try self.memWriteBanked(use_bsr, @intCast(instruction & 0x00FF), val);
             },
             0b1011 => { // BTFSC - Bit Test File, Skip if Clear
                 const bit_num: u3 = @intCast((nibble2 & 0b1110) >> 1);
                 const use_bsr = (nibble2 & 0b0001) == 1;
                 std.debug.print("BTFSC bit_num={} use_bsr={} 0x{x}\n", .{ bit_num, use_bsr, instruction & 0x00FF });
-                const val = try self.memRead(use_bsr, @intCast(instruction & 0x00FF));
+                const val = try self.memReadBanked(use_bsr, @intCast(instruction & 0x00FF));
                 if ((val & (@as(u8, 1) << bit_num)) == 0) {
                     self.PC += 2; // skip next instruction
                     std.debug.print("BTFSC skipping next instruction because bit is clear\n", .{});
@@ -482,15 +629,15 @@ pub const PIC18 = struct {
                 const bit_num: u3 = @intCast((nibble2 & 0b1110) >> 1);
                 const use_bsr = (nibble2 & 0b0001) == 1;
                 std.debug.print("BCF bit_num={} use_bsr={} 0x{x}\n", .{ bit_num, use_bsr, instruction & 0x00FF });
-                const val = try self.memRead(use_bsr, @intCast(instruction & 0x00FF)) & ~(@as(u8, 1) << bit_num);
-                try self.memWrite(use_bsr, @intCast(instruction & 0x00FF), val);
+                const val = try self.memReadBanked(use_bsr, @intCast(instruction & 0x00FF)) & ~(@as(u8, 1) << bit_num);
+                try self.memWriteBanked(use_bsr, @intCast(instruction & 0x00FF), val);
             },
             0b0111 => { // BTG Bit Toggle f
                 const bit_num: u3 = @intCast((nibble2 & 0b1110) >> 1);
                 const use_bsr = (nibble2 & 0b0001) == 1;
                 std.debug.print("BTG bit_num={} use_bsr={} 0x{x}\n", .{ bit_num, use_bsr, instruction & 0x00FF });
-                const val = try self.memRead(use_bsr, @intCast(instruction & 0x00FF)) ^ (@as(u8, 1) << bit_num);
-                try self.memWrite(use_bsr, @intCast(instruction & 0x00FF), val);
+                const val = try self.memReadBanked(use_bsr, @intCast(instruction & 0x00FF)) ^ (@as(u8, 1) << bit_num);
+                try self.memWriteBanked(use_bsr, @intCast(instruction & 0x00FF), val);
             },
             0b1100 => { // MOVFF Move fs to fd
                 const second_word = self.consumeProgWord();
@@ -503,7 +650,8 @@ pub const PIC18 = struct {
                 // resolve indirect handles side effects on FSRs
                 const indirect_fs = try self.resolveIndirect(fs);
                 const indirect_fd = try self.resolveIndirect(fd);
-                self.MEM[indirect_fd] = self.MEM[indirect_fs];
+
+                try self.memWrite(indirect_fd, try self.memRead(indirect_fs));
             },
             0b1101 => {
                 switch (nibble2 & 0b1000) {
@@ -562,6 +710,7 @@ pub const PIC18 = struct {
         self.allocator.free(self.MEM);
         self.allocator.free(self.PROG);
         self.allocator.free(self.configuration_bytes);
+        self.allocator.destroy(self); // Does this make sense?
     }
 };
 

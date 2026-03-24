@@ -1,7 +1,7 @@
 const std = @import("std");
 const main = @import("main.zig");
 
-pub fn asm2emu(asm_source: []const u8) !main.PIC18 {
+pub fn asm2emu(asm_source: []const u8) !*main.PIC18 {
     var tmp_dir = std.testing.tmpDir(.{});
 
     const prelude =
