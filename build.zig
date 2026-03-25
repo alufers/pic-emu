@@ -19,7 +19,6 @@ pub fn build(b: *std.Build) void {
 
     const exe = b.addExecutable(.{
         .name = "emu",
-        .use_llvm = true,
 
         .root_module = b.createModule(.{
             // b.createModule defines a new module just like b.addModule but,
@@ -32,13 +31,6 @@ pub fn build(b: *std.Build) void {
             // definition if desireable (e.g. firmware for embedded devices).
             .target = target,
             .optimize = optimize,
-
-            .stack_check = true,
-            .stack_protector = true,
-            .red_zone = true,
-
-            .link_libc = true,
-            .sanitize_c = .full,
 
             // List of modules available for import in source files part of the
             // root module.

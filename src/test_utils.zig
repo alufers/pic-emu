@@ -1,7 +1,7 @@
 const std = @import("std");
-const main = @import("main.zig");
+const pic18 = @import("pic18.zig");
 
-pub fn asm2emu(asm_source: []const u8) !*main.PIC18 {
+pub fn asm2emu(asm_source: []const u8) !*pic18.PIC18 {
     var tmp_dir = std.testing.tmpDir(.{});
 
     const prelude =
@@ -38,7 +38,7 @@ pub fn asm2emu(asm_source: []const u8) !*main.PIC18 {
         else => try std.testing.expect(false),
     }
 
-    var pic = main.PIC18.init(std.testing.allocator);
+    var pic = pic18.PIC18.init(std.testing.allocator);
 
     // load compiled data
     var hexfile = try tmp_dir.dir.openFile("a.hex", .{ .mode = .read_only });

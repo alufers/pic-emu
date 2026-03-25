@@ -1,5 +1,4 @@
 const std = @import("std");
-const main = @import("main.zig");
 const test_utils = @import("test_utils.zig");
 const gpio = @import("gpio.zig");
 const asm2emu = test_utils.asm2emu;

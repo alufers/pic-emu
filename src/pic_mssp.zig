@@ -1,8 +1,8 @@
 const std = @import("std");
-const main = @import("main.zig");
-const SpecialFunctionRegisterHandler = main.SpecialFunctionRegisterHandler;
-const PIC18 = main.PIC18;
-const PeripheralError = main.PeripheralError;
+const pic18 = @import("pic18.zig");
+const SpecialFunctionRegisterHandler = pic18.SpecialFunctionRegisterHandler;
+const PIC18 = pic18.PIC18;
+const PeripheralError = pic18.PeripheralError;
 
 pub const SSPxSTAT = packed struct {
     /// BF: Buffer Full Status bit (Receive mode only).

@@ -1,8 +1,8 @@
-const main = @import("main.zig");
-const SpecialFunctionRegisterHandler = main.SpecialFunctionRegisterHandler;
-const PIC18 = main.PIC18;
+const pic18 = @import("pic18.zig");
+const SpecialFunctionRegisterHandler = pic18.SpecialFunctionRegisterHandler;
+const PIC18 = pic18.PIC18;
 const gpio = @import("gpio.zig");
-const PeripheralError = main.PeripheralError;
+const PeripheralError = pic18.PeripheralError;
 
 pub const PICGPIOPort = struct {
     PORT_REG_HANDLER: SpecialFunctionRegisterHandler,
