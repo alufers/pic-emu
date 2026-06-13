@@ -72,9 +72,22 @@ pub const PICTimer0 = struct {
         };
     }
 
-    pub fn tick(self: *PICTimer0) void {
+    pub fn tick(self: *PICTimer0, pic: *PIC18) void {
         if (self.t0con.TMR0ON == 1) {
-            self.timer_value += 1;
+            self.timer_value, _ = @addWithOverflow(self.timer_value, 1);
+            if (self.t0con.T08BIT == 1 and self.timer_value == 256) {
+                self.timer_value = 0;
+            }
+            if (self.timer_value == 0) {
+                if (pic.REGS.INTCON.GIE == 1 and pic.REGS.INTCON.TMR0IE == 1) {
+                    std.debug.print("Timer0 FIRED!!!!!!!! INTCON = {}\n", .{pic.REGS.INTCON});
+                    pic.STACK[pic.REGS.STKPTR.*] = pic.PC;
+                    pic.REGS.STKPTR.* += 1;
+                    pic.REGS.INTCON.GIE = 0;
+                    pic.REGS.INTCON.TMR0IF = 1;
+                    pic.PC = 0x0008;
+                }
+            }
         }
     }
 

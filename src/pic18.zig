@@ -53,6 +53,48 @@ pub const PIC18 = struct {
         TO: u1,
         unused: u1,
     };
+
+    const RconReg = packed struct {
+        /// Brown-out Reset Status bit (negated)
+        BOR: u1,
+
+        /// Power-on Reset Status bit (negated)
+        POR: u1,
+
+        /// Power-Down Detection Flag bit (negated)
+        PD: u1,
+
+        /// Watchdog Time-out Flag bit (negated)
+        TO: u1,
+
+        /// Reset Instruction flag bit (negated)
+        RI: u1,
+
+        /// Configuration Mismatch flag bit (negated)
+        CM: u1,
+
+        /// BOR Software Enable bit
+        SBOREN: u1,
+
+        /// Interrupt Priority Enable bit
+        IPEN: u1,
+    };
+
+    const IntconReg = packed struct {
+        RBIF: u1,
+        INT0IF: u1,
+        TMR0IF: u1,
+        RBIE: u1,
+        INT0IE: u1,
+        TMR0IE: u1,
+
+        /// Peripheral Interrupt Enable bit
+        PEIE: u1,
+
+        /// Global Interrupt Enable bit
+        GIE: u1,
+    };
+
     const RegAddrs = struct {
         TBLPTRH: *u8,
         TBLPTRL: *u8,
@@ -90,6 +132,9 @@ pub const PIC18 = struct {
 
         PRODL: *u8,
         PRODH: *u8,
+
+        RCON: *RconReg,
+        INTCON: *IntconReg,
     };
 
     allocator: std.mem.Allocator,
@@ -103,6 +148,10 @@ pub const PIC18 = struct {
     PC: u21,
     REGS: RegAddrs,
     STACK: [31]u21, // 31 levels of hardware stack
+
+    WREG_SHADOW: u8,
+    STATUS_SHADOW: StatusReg,
+    BSR_SHADOW: u8,
 
     /// Maps to memory addresses from 0xF00 to 0xFFF,
     /// If Some, read/write to this register is handled by the vtable, otherwise it is direct memory access
@@ -177,6 +226,9 @@ pub const PIC18 = struct {
 
             .PRODL = &mem[0xFF3],
             .PRODH = &mem[0xFF4],
+
+            .RCON = @ptrCast(&mem[0x0FD0]),
+            .INTCON = @ptrCast(&mem[0x0FF2]),
         };
         pic.MSSP1 = PICMSSP.init();
         pic.MSSP2 = PICMSSP.init();
@@ -419,7 +471,20 @@ pub const PIC18 = struct {
         }
     }
 
+    pub fn saveToShadow(self: *PIC18) void {
+        self.WREG_SHADOW = self.REGS.WREG.*;
+        self.STATUS_SHADOW = self.REGS.STATUS.*;
+        self.BSR_SHADOW = self.REGS.BSR.*;
+    }
+
+    pub fn restoreFromShadow(self: *PIC18) void {
+        self.REGS.WREG.* = self.WREG_SHADOW;
+        self.REGS.STATUS.* = self.STATUS_SHADOW;
+        self.REGS.BSR.* = self.BSR_SHADOW;
+    }
+
     pub fn execInstruction(self: *PIC18) !void {
+        self.Timer0.tick(self);
         const instruction = self.consumeProgWord();
         std.debug.print("0x{x:0>4} INST: {b:0>16} (0x{x:0>4})\n", .{ self.PC - 2, instruction, instruction });
         const nibble1 = @as(u4, @intCast((instruction & 0xF000) >> 12));
@@ -434,6 +499,12 @@ pub const PIC18 = struct {
                             0b0000 => {
                                 if (nibble4 == 0b000) {
                                     std.debug.print("NOP\n", .{});
+                                } else if (nibble4 == 0b0100) {
+                                    std.debug.print("CLRWDT\n", .{});
+                                    @as(*u8, @ptrCast(&self.REGS.STATUS)).* = 0x00;
+                                    self.REGS.STATUS.*.TO = 1;
+                                    self.REGS.STATUS.*.PD = 1;
+                                    // TODO: implement watchdog timer
                                 } else if (nibble4 & 0b1100 != 0) { // TBLRD - Table read
                                     // supposedly the third nibble is 0000, but for some reason it is allowed to be non-zero
                                     const mm = instruction & 0x0003;
@@ -459,15 +530,33 @@ pub const PIC18 = struct {
                                     return error.InvalidInstruction;
                                 }
                             },
-                            0b0001 => { // RETURN
-                                const use_shadow = instruction & 0x0001 == 1;
-                                try self.check(!use_shadow, "shadow registers not implemented", .{}); // TODO: implement this
+                            0b0001 => {
+                                switch (nibble4 & 0b1110) {
+                                    0b0000 => { // RETFIE - Return from interrupt
+                                        const use_shadow = instruction & 0x0001 == 1;
+                                        if (use_shadow) {
+                                            self.restoreFromShadow();
+                                        }
 
-                                try self.check(self.REGS.STKPTR.* > 0, "stack underflow on RETURN", .{}); // TODO: implement stack underflow handling
-                                self.REGS.STKPTR.* -= 1;
-                                self.PC = self.STACK[self.REGS.STKPTR.*];
+                                        try self.check(self.REGS.STKPTR.* > 0, "stack underflow on RETFIE", .{}); // TODO: implement stack underflow handling
+                                        self.REGS.STKPTR.* -= 1;
+                                        self.PC = self.STACK[self.REGS.STKPTR.*];
+                                        self.REGS.INTCON.GIE = 1;
+                                    },
+                                    0b0010 => { // RETURN
+                                        const use_shadow = instruction & 0x0001 == 1;
+                                        if (use_shadow) {
+                                            self.restoreFromShadow();
+                                        }
 
-                                std.debug.print("RETURN to 0x{x} (SP={})\n", .{ self.PC, self.REGS.STKPTR.* });
+                                        try self.check(self.REGS.STKPTR.* > 0, "stack underflow on RETURN", .{}); // TODO: implement stack underflow handling
+                                        self.REGS.STKPTR.* -= 1;
+                                        self.PC = self.STACK[self.REGS.STKPTR.*];
+
+                                        std.debug.print("RETURN to 0x{x} (SP={})\n", .{ self.PC, self.REGS.STKPTR.* });
+                                    },
+                                    else => return error.InvalidInstruction,
+                                }
                             },
                             else => return error.InvalidInstruction,
                         }
@@ -743,6 +832,25 @@ pub const PIC18 = struct {
                             self.REGS.WREG.* = val;
                         }
                     },
+                    0b1000 => { // INFSNZ - Increment f, Skip if not 0
+                        std.debug.print("INFSNZ use_bsr={} dest_in_ram={}  0x{x}\n", .{
+                            use_bsr,
+                            dest_in_ram,
+                            instruction & 0x00FF,
+                        });
+
+                        const f = try self.memReadBanked(use_bsr, @intCast(instruction & 0x00FF));
+                        const val, _ = @addWithOverflow(f, 1);
+                        if (val != 0) {
+                            self.PC += 2; // skip next instruction
+                            std.debug.print("INFSNZ skipping next instruction because result is nonzero\n", .{});
+                        }
+                        if (dest_in_ram) {
+                            try self.memWriteBanked(use_bsr, @intCast(instruction & 0x00FF), val);
+                        } else {
+                            self.REGS.WREG.* = val;
+                        }
+                    },
                     else => return error.InvalidInstruction,
                 }
             },
@@ -927,7 +1035,11 @@ pub const PIC18 = struct {
                     },
                     0b1100, 0b1101 => { // CALL - Call subroutine
                         const use_shadow = (nibble2 & 0b0001) == 1;
-                        try self.check(!use_shadow, "shadow registers not implemented", .{}); // TODO: implement this
+
+                        if (use_shadow) {
+                            self.saveToShadow();
+                        }
+
                         const second_word = self.consumeProgWord();
                         try self.check((second_word & 0xF000) >> 12 == 0b1111, "invalid CALL", .{});
                         try self.check(self.REGS.STKPTR.* < self.STACK.len, "stack overflow not implemented", .{}); // TODO: implement stack overflow handling
