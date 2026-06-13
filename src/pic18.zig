@@ -586,6 +586,15 @@ pub const PIC18 = struct {
                     0b0001 => { // MOVLB Move literal to BSR
                         self.REGS.BSR.* = @intCast(instruction & 0x003F); // Load 6 bits only
                     },
+                    0b0010, 0b0011 => { // MULWF - Multiply W with F
+                        const use_bsr = (nibble2 & 0b0001) == 1; // If 'a' is '0', the Access Bank is selected. If 'a' is '1', the BSR is used to select the GPR bank.
+                        const val = @as(u16, try self.memReadBanked(use_bsr, @intCast(instruction & 0x00FF)));
+                        const result: u16 = @as(u16, self.REGS.WREG.*) * val;
+
+                        self.REGS.PRODH.* = @intCast(result >> 8);
+                        self.REGS.PRODL.* = @intCast(result & 0xFF);
+                        self.printInstruction(instruction, "MULWF 0x{x} -> PRODH=0x{x} PRODL=0x{x}\n", .{ instruction & 0x00FF, self.REGS.PRODH.*, self.REGS.PRODL.* });
+                    },
                     0b1010 => { // XORLW - Exlusive OR Literal with W
                         self.REGS.WREG.* = self.REGS.WREG.* ^ @as(u8, @intCast(instruction & 0x00FF));
                         self.printInstruction(instruction, "XORLW 0x{x}\n", .{self.REGS.WREG.*});
@@ -646,6 +655,22 @@ pub const PIC18 = struct {
                     0b1110 => { // MOVLW - Move Literal to W
                         self.REGS.WREG.* = @intCast(instruction & 0x00FF);
                         self.printInstruction(instruction, "MOVLW 0x{x}\n", .{self.REGS.WREG.*});
+                    },
+                    0b1111 => { // ADDLW - Add literal to W
+                        // Status affected = N, OV, C, DC, Z
+                        const k: u8 = @intCast(instruction & 0x00FF);
+
+                        const val = self.REGS.WREG.* +% k;
+
+                        self.REGS.STATUS.*.Z = if (val == 0) 1 else 0;
+                        self.REGS.STATUS.*.N = if (val & 0x80 != 0) 1 else 0;
+                        self.REGS.STATUS.*.C = if (self.REGS.WREG.* == 0xFF) 1 else 0;
+                        self.REGS.STATUS.*.DC = if ((self.REGS.WREG.* & 0x0F) == 0x0F) 1 else 0;
+                        self.REGS.STATUS.*.OV = if (self.REGS.WREG.* == 0x7F) 1 else 0;
+
+                        self.REGS.WREG.* = val;
+
+                        self.printInstruction(instruction, "ADDLW 0x{x}\n", .{self.REGS.WREG.*});
                     },
                     else => return error.InvalidInstruction,
                 }
@@ -949,6 +974,14 @@ pub const PIC18 = struct {
             0b0110 => {
                 const use_bsr = (nibble2 & 0b0001) == 1;
                 switch (nibble2 & 0b1110) {
+                    0b0000 => { // CPFSLT - Compare f with W, Skip if f < W
+                        const val = try self.memReadBanked(use_bsr, @intCast(instruction & 0x00FF));
+                        self.printInstruction(instruction, "CPFSGT 0x{x}\n", .{instruction & 0x00FF});
+                        if (val < self.REGS.WREG.*) {
+                            self.PC += 2; // skip next instruction
+                            self.printInstruction(instruction, "CPFSGT skipping next instruction because f>W\n", .{});
+                        }
+                    },
                     0b0100 => { // CPFSGT - Compare f with W, Skip if f > W
                         const val = try self.memReadBanked(use_bsr, @intCast(instruction & 0x00FF));
                         self.printInstruction(instruction, "CPFSGT 0x{x}\n", .{instruction & 0x00FF});
