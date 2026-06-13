@@ -500,6 +500,15 @@ pub const PIC18 = struct {
         self.REGS.BSR.* = self.BSR_SHADOW;
     }
 
+    pub fn handleInterrupt(self: *PIC18) void {
+        // TODO: handle overflow
+        self.STACK[self.REGS.STKPTR.*] = self.PC;
+        self.REGS.STKPTR.* += 1;
+        self.saveToShadow();
+        self.REGS.INTCON.GIE = 0;
+        self.PC = 0x0008;
+    }
+
     pub fn execInstruction(self: *PIC18) !void {
         self.Timer0.tick(self);
         const instruction = self.consumeProgWord();
@@ -660,13 +669,13 @@ pub const PIC18 = struct {
                         // Status affected = N, OV, C, DC, Z
                         const k: u8 = @intCast(instruction & 0x00FF);
 
-                        const val = self.REGS.WREG.* +% k;
+                        const val, const overflow = @addWithOverflow(self.REGS.WREG.*, k);
 
                         self.REGS.STATUS.*.Z = if (val == 0) 1 else 0;
                         self.REGS.STATUS.*.N = if (val & 0x80 != 0) 1 else 0;
-                        self.REGS.STATUS.*.C = if (self.REGS.WREG.* == 0xFF) 1 else 0;
-                        self.REGS.STATUS.*.DC = if ((self.REGS.WREG.* & 0x0F) == 0x0F) 1 else 0;
-                        self.REGS.STATUS.*.OV = if (self.REGS.WREG.* == 0x7F) 1 else 0;
+                        self.REGS.STATUS.*.C = overflow;
+                        self.REGS.STATUS.*.DC = if (((self.REGS.WREG.* & 0xF) + (k & 0xF)) > 0xF) 1 else 0;
+                        self.REGS.STATUS.*.OV = if (((~(k ^ self.REGS.WREG.*)) & (k ^ val) & 0x80) != 0) 1 else 0;
 
                         self.REGS.WREG.* = val;
 

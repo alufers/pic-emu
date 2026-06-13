@@ -1697,3 +1697,305 @@ test "CALL and RETURN instruction" {
 
     // Status Affected: None
 }
+
+test "XORLW instruction" {
+    var pic = try asm2emu(
+        \\      MOVLW 0xB5
+        \\      XORLW 0xAF         ; doc example: 0xB5 ^ 0xAF = 0x1A, N=0 Z=0
+        \\      MOVLW 0xFF
+        \\      XORLW 0xFF         ; 0xFF ^ 0xFF = 0x00, Z=1 N=0
+        \\      MOVLW 0x00
+        \\      XORLW 0x80         ; 0x00 ^ 0x80 = 0x80, N=1 Z=0
+        \\  END
+    );
+    defer pic.deinit();
+
+    try pic.execInstruction(); // MOVLW 0xB5
+    try pic.execInstruction(); // XORLW 0xAF
+    try std.testing.expectEqual(0x1A, pic.REGS.WREG.*);
+    try std.testing.expectEqual(0, pic.REGS.STATUS.*.Z);
+    try std.testing.expectEqual(0, pic.REGS.STATUS.*.N);
+
+    try pic.execInstruction(); // MOVLW 0xFF
+    try pic.execInstruction(); // XORLW 0xFF
+    try std.testing.expectEqual(0x00, pic.REGS.WREG.*);
+    try std.testing.expectEqual(1, pic.REGS.STATUS.*.Z);
+    try std.testing.expectEqual(0, pic.REGS.STATUS.*.N);
+
+    try pic.execInstruction(); // MOVLW 0x00
+    try pic.execInstruction(); // XORLW 0x80
+    try std.testing.expectEqual(0x80, pic.REGS.WREG.*);
+    try std.testing.expectEqual(0, pic.REGS.STATUS.*.Z);
+    try std.testing.expectEqual(1, pic.REGS.STATUS.*.N);
+
+    // Status Affected: N, Z
+}
+
+test "ADDLW instruction" {
+    // ADDLW: (W) + k -> W. Status Affected: N, OV, C, DC, Z
+    // Carry convention for addition: C=1 means a carry out of bit 7 (unsigned overflow).
+    // DC=1 means a carry out of bit 3. OV=1 means signed overflow.
+    var pic = try asm2emu(
+        \\      MOVLW 0x10
+        \\      ADDLW 0x15         ; doc example: 0x10 + 0x15 = 0x25, all flags clear
+        \\      MOVLW 0xFF
+        \\      ADDLW 0x01         ; 0xFF + 0x01 = 0x00: C=1, DC=1, Z=1
+        \\      MOVLW 0x50
+        \\      ADDLW 0xC0         ; 0x50 + 0xC0 = 0x110 -> 0x10: C=1, no DC, no OV
+        \\      MOVLW 0x08
+        \\      ADDLW 0x08         ; 0x08 + 0x08 = 0x10: DC=1, C=0
+        \\      MOVLW 0x40
+        \\      ADDLW 0x40         ; 0x40 + 0x40 = 0x80: OV=1, N=1, C=0
+        \\  END
+    );
+    defer pic.deinit();
+
+    // Case 1 (doc): 0x10 + 0x15 = 0x25, no carries, positive, nonzero
+    try pic.execInstruction(); // MOVLW 0x10
+    try pic.execInstruction(); // ADDLW 0x15
+    try std.testing.expectEqual(0x25, pic.REGS.WREG.*);
+    try std.testing.expectEqual(0, pic.REGS.STATUS.*.C);
+    try std.testing.expectEqual(0, pic.REGS.STATUS.*.DC);
+    try std.testing.expectEqual(0, pic.REGS.STATUS.*.Z);
+    try std.testing.expectEqual(0, pic.REGS.STATUS.*.N);
+    try std.testing.expectEqual(0, pic.REGS.STATUS.*.OV);
+
+    // Case 2: 0xFF + 0x01 = 0x00, full carry and digit carry, zero result
+    try pic.execInstruction(); // MOVLW 0xFF
+    try pic.execInstruction(); // ADDLW 0x01
+    try std.testing.expectEqual(0x00, pic.REGS.WREG.*);
+    try std.testing.expectEqual(1, pic.REGS.STATUS.*.C);
+    try std.testing.expectEqual(1, pic.REGS.STATUS.*.DC);
+    try std.testing.expectEqual(1, pic.REGS.STATUS.*.Z);
+    try std.testing.expectEqual(0, pic.REGS.STATUS.*.N);
+    try std.testing.expectEqual(0, pic.REGS.STATUS.*.OV);
+
+    // Case 3: 0x50 + 0xC0 = 0x110 -> 0x10, carry out of bit 7, no digit carry, no signed overflow
+    try pic.execInstruction(); // MOVLW 0x50
+    try pic.execInstruction(); // ADDLW 0xC0
+    try std.testing.expectEqual(0x10, pic.REGS.WREG.*);
+    try std.testing.expectEqual(1, pic.REGS.STATUS.*.C);
+    try std.testing.expectEqual(0, pic.REGS.STATUS.*.DC);
+    try std.testing.expectEqual(0, pic.REGS.STATUS.*.Z);
+    try std.testing.expectEqual(0, pic.REGS.STATUS.*.N);
+    try std.testing.expectEqual(0, pic.REGS.STATUS.*.OV); // pos + neg can never signed-overflow
+
+    // Case 4: 0x08 + 0x08 = 0x10, only digit carry (bit 3 -> bit 4)
+    try pic.execInstruction(); // MOVLW 0x08
+    try pic.execInstruction(); // ADDLW 0x08
+    try std.testing.expectEqual(0x10, pic.REGS.WREG.*);
+    try std.testing.expectEqual(0, pic.REGS.STATUS.*.C);
+    try std.testing.expectEqual(1, pic.REGS.STATUS.*.DC);
+    try std.testing.expectEqual(0, pic.REGS.STATUS.*.Z);
+    try std.testing.expectEqual(0, pic.REGS.STATUS.*.N);
+    try std.testing.expectEqual(0, pic.REGS.STATUS.*.OV);
+
+    // Case 5: 0x40 + 0x40 = 0x80, signed overflow (pos + pos = neg)
+    try pic.execInstruction(); // MOVLW 0x40
+    try pic.execInstruction(); // ADDLW 0x40
+    try std.testing.expectEqual(0x80, pic.REGS.WREG.*);
+    try std.testing.expectEqual(0, pic.REGS.STATUS.*.C);
+    try std.testing.expectEqual(0, pic.REGS.STATUS.*.DC);
+    try std.testing.expectEqual(0, pic.REGS.STATUS.*.Z);
+    try std.testing.expectEqual(1, pic.REGS.STATUS.*.N);
+    try std.testing.expectEqual(1, pic.REGS.STATUS.*.OV);
+
+    // Status Affected: N, OV, C, DC, Z
+}
+
+test "MULWF instruction" {
+    var pic = try asm2emu(
+        \\      MOVLW 0xC4
+        \\      MULWF 0x10, 0      ; doc example: 0xC4 * 0xB5 = 0x8A94
+        \\      MOVLW 0x05
+        \\      MULWF 0x11, 0      ; 0x05 * 0x03 = 0x000F
+        \\      MOVLW 0x00
+        \\      MULWF 0x12, 0      ; 0x00 * 0xFF = 0x0000
+        \\      MOVLB 6
+        \\      MOVLW 0x10
+        \\      MULWF 0x20, 1      ; BSR bank 6: 0x10 * 0x10 = 0x0100
+        \\  END
+    );
+    defer pic.deinit();
+    pic.MEM[0x10] = 0xB5;
+    pic.MEM[0x11] = 0x03;
+    pic.MEM[0x12] = 0xFF;
+    pic.MEM[0x620] = 0x10;
+
+    try pic.execInstruction(); // MOVLW 0xC4
+    try pic.execInstruction(); // MULWF 0x10, 0
+    try std.testing.expectEqual(0xC4, pic.REGS.WREG.*); // W unchanged
+    try std.testing.expectEqual(0xB5, pic.MEM[0x10]); // f unchanged
+    try std.testing.expectEqual(0x8A, pic.REGS.PRODH.*);
+    try std.testing.expectEqual(0x94, pic.REGS.PRODL.*);
+
+    try pic.execInstruction(); // MOVLW 0x05
+    try pic.execInstruction(); // MULWF 0x11, 0
+    try std.testing.expectEqual(0x00, pic.REGS.PRODH.*);
+    try std.testing.expectEqual(0x0F, pic.REGS.PRODL.*);
+
+    try pic.execInstruction(); // MOVLW 0x00
+    try pic.execInstruction(); // MULWF 0x12, 0
+    try std.testing.expectEqual(0x00, pic.REGS.PRODH.*);
+    try std.testing.expectEqual(0x00, pic.REGS.PRODL.*);
+
+    try pic.execInstruction(); // MOVLB 6
+    try pic.execInstruction(); // MOVLW 0x10
+    try pic.execInstruction(); // MULWF 0x20, 1
+    try std.testing.expectEqual(0x01, pic.REGS.PRODH.*);
+    try std.testing.expectEqual(0x00, pic.REGS.PRODL.*);
+    try std.testing.expectEqual(0x10, pic.MEM[0x620]); // f unchanged
+
+    // Status Affected: None
+}
+
+test "INFSNZ instruction" {
+    var pic = try asm2emu(
+        \\      INFSNZ 0x10, 1, 0  ; 0x01 -> 0x02, nonzero -> skip
+        \\      MOVLW 0xFF         ; trap
+        \\      MOVLW 0x11         ; WREG = 0x11 (skip happened)
+        \\      INFSNZ 0x11, 1, 0  ; 0xFF -> 0x00, zero -> no skip
+        \\      MOVLW 0x22         ; WREG = 0x22 (no skip)
+        \\      INFSNZ 0x12, 0, 0  ; d=0: result to W, f unchanged; 0x7E -> 0x7F nonzero -> skip
+        \\      MOVLW 0xFF         ; trap
+        \\      MOVLW 0x33         ; WREG = 0x33
+        \\      MOVLB 4
+        \\      INFSNZ 0x20, 1, 1  ; BSR bank 4: 0x05 -> 0x06 nonzero -> skip
+        \\      MOVLW 0xFF         ; trap
+        \\      MOVLW 0x44         ; WREG = 0x44
+        \\  END
+    );
+    defer pic.deinit();
+    pic.MEM[0x10] = 0x01;
+    pic.MEM[0x11] = 0xFF;
+    pic.MEM[0x12] = 0x7E;
+    pic.MEM[0x420] = 0x05;
+
+    try pic.execInstruction(); // INFSNZ 0x10 (0x01->0x02, nonzero, skip)
+    try std.testing.expectEqual(0x02, pic.MEM[0x10]);
+    try pic.execInstruction(); // MOVLW 0x11 (trap skipped)
+    try std.testing.expectEqual(0x11, pic.REGS.WREG.*);
+
+    try pic.execInstruction(); // INFSNZ 0x11 (0xFF->0x00, zero, no skip)
+    try std.testing.expectEqual(0x00, pic.MEM[0x11]);
+    try pic.execInstruction(); // MOVLW 0x22 (not skipped)
+    try std.testing.expectEqual(0x22, pic.REGS.WREG.*);
+
+    try pic.execInstruction(); // INFSNZ 0x12, 0 (d=0: W=0x7F, f unchanged, nonzero, skip)
+    try std.testing.expectEqual(0x7F, pic.REGS.WREG.*);
+    try std.testing.expectEqual(0x7E, pic.MEM[0x12]); // f unchanged
+    try pic.execInstruction(); // MOVLW 0x33 (trap skipped)
+    try std.testing.expectEqual(0x33, pic.REGS.WREG.*);
+
+    try pic.execInstruction(); // MOVLB 4
+    try pic.execInstruction(); // INFSNZ 0x20, 1, 1 (BSR bank 4, 0x05->0x06, skip)
+    try std.testing.expectEqual(0x06, pic.MEM[0x420]);
+    try pic.execInstruction(); // MOVLW 0x44 (trap skipped)
+    try std.testing.expectEqual(0x44, pic.REGS.WREG.*);
+
+    // Status Affected: None
+}
+
+test "CPFSLT instruction" {
+    // Compare f with W (unsigned), skip next instruction if f < W. f is not modified.
+    var pic = try asm2emu(
+        \\      MOVLW 0x50
+        \\      CPFSLT 0x10, 0     ; f=0x30 < W=0x50 -> skip
+        \\      MOVLW 0xFF         ; trap
+        \\      MOVLW 0x11         ; WREG = 0x11 (skip happened)
+        \\      MOVLW 0x20
+        \\      CPFSLT 0x11, 0     ; f=0x50 > W=0x20 -> no skip
+        \\      MOVLW 0x22         ; WREG = 0x22 (no skip)
+        \\      MOVLW 0x40
+        \\      CPFSLT 0x12, 0     ; f=0x40 == W=0x40 -> no skip (equal is not less)
+        \\      MOVLW 0x33         ; WREG = 0x33 (no skip)
+        \\      MOVLB 2
+        \\      MOVLW 0xF0
+        \\      CPFSLT 0x20, 1     ; BSR bank 2: f=0x10 < W=0xF0 -> skip
+        \\      MOVLW 0xFF         ; trap
+        \\      MOVLW 0x44         ; WREG = 0x44 (skip happened)
+        \\  END
+    );
+    defer pic.deinit();
+    pic.MEM[0x10] = 0x30;
+    pic.MEM[0x11] = 0x50;
+    pic.MEM[0x12] = 0x40;
+    pic.MEM[0x220] = 0x10;
+
+    try pic.execInstruction(); // MOVLW 0x50
+    try pic.execInstruction(); // CPFSLT 0x10 -> skip
+    try pic.execInstruction(); // MOVLW 0x11 (trap skipped)
+    try std.testing.expectEqual(0x11, pic.REGS.WREG.*);
+    try std.testing.expectEqual(0x30, pic.MEM[0x10]); // f unchanged
+
+    try pic.execInstruction(); // MOVLW 0x20
+    try pic.execInstruction(); // CPFSLT 0x11 -> no skip (f > W)
+    try pic.execInstruction(); // MOVLW 0x22
+    try std.testing.expectEqual(0x22, pic.REGS.WREG.*);
+
+    try pic.execInstruction(); // MOVLW 0x40
+    try pic.execInstruction(); // CPFSLT 0x12 -> no skip (f == W)
+    try pic.execInstruction(); // MOVLW 0x33
+    try std.testing.expectEqual(0x33, pic.REGS.WREG.*);
+
+    try pic.execInstruction(); // MOVLB 2
+    try pic.execInstruction(); // MOVLW 0xF0
+    try pic.execInstruction(); // CPFSLT 0x20, 1 -> skip
+    try pic.execInstruction(); // MOVLW 0x44 (trap skipped)
+    try std.testing.expectEqual(0x44, pic.REGS.WREG.*);
+    try std.testing.expectEqual(0x10, pic.MEM[0x220]); // f unchanged
+
+    // Status Affected: None
+}
+
+test "CPFSGT instruction" {
+    // Compare f with W (unsigned), skip next instruction if f > W. f is not modified.
+    var pic = try asm2emu(
+        \\      MOVLW 0x20
+        \\      CPFSGT 0x10, 0     ; f=0x50 > W=0x20 -> skip
+        \\      MOVLW 0xFF         ; trap
+        \\      MOVLW 0x11         ; WREG = 0x11 (skip happened)
+        \\      MOVLW 0x80
+        \\      CPFSGT 0x11, 0     ; f=0x30 < W=0x80 -> no skip
+        \\      MOVLW 0x22         ; WREG = 0x22 (no skip)
+        \\      MOVLW 0x40
+        \\      CPFSGT 0x12, 0     ; f=0x40 == W=0x40 -> no skip (equal is not greater)
+        \\      MOVLW 0x33         ; WREG = 0x33 (no skip)
+        \\      MOVLB 3
+        \\      MOVLW 0x05
+        \\      CPFSGT 0x20, 1     ; BSR bank 3: f=0xF0 > W=0x05 -> skip
+        \\      MOVLW 0xFF         ; trap
+        \\      MOVLW 0x44         ; WREG = 0x44 (skip happened)
+        \\  END
+    );
+    defer pic.deinit();
+    pic.MEM[0x10] = 0x50;
+    pic.MEM[0x11] = 0x30;
+    pic.MEM[0x12] = 0x40;
+    pic.MEM[0x320] = 0xF0;
+
+    try pic.execInstruction(); // MOVLW 0x20
+    try pic.execInstruction(); // CPFSGT 0x10 -> skip
+    try pic.execInstruction(); // MOVLW 0x11 (trap skipped)
+    try std.testing.expectEqual(0x11, pic.REGS.WREG.*);
+    try std.testing.expectEqual(0x50, pic.MEM[0x10]); // f unchanged
+
+    try pic.execInstruction(); // MOVLW 0x80
+    try pic.execInstruction(); // CPFSGT 0x11 -> no skip (f < W)
+    try pic.execInstruction(); // MOVLW 0x22
+    try std.testing.expectEqual(0x22, pic.REGS.WREG.*);
+
+    try pic.execInstruction(); // MOVLW 0x40
+    try pic.execInstruction(); // CPFSGT 0x12 -> no skip (f == W)
+    try pic.execInstruction(); // MOVLW 0x33
+    try std.testing.expectEqual(0x33, pic.REGS.WREG.*);
+
+    try pic.execInstruction(); // MOVLB 3
+    try pic.execInstruction(); // MOVLW 0x05
+    try pic.execInstruction(); // CPFSGT 0x20, 1 -> skip
+    try pic.execInstruction(); // MOVLW 0x44 (trap skipped)
+    try std.testing.expectEqual(0x44, pic.REGS.WREG.*);
+    try std.testing.expectEqual(0xF0, pic.MEM[0x320]); // f unchanged
+
+    // Status Affected: None
+}
