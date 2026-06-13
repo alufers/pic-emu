@@ -29,18 +29,7 @@ pub fn main(init: std.process.Init) !void {
 
     pic.GPIOPortA.pins[5] = &spi_cs_pin.interface;
 
-    var cnt: u32 = 0;
-    for (0..100000_000) |idx| {
-        if (idx % 50000 == 0) {
-            std.debug.print("mem[0x01a9]={}, mem[0x01a8]={}\n", .{ pic.MEM[0x01a9], pic.MEM[0x01a8] });
-        }
-        if (pic.PC == 0x01b1ce) {
-            cnt += 1;
-            if (cnt == 1) {
-                // Print
-            }
-            std.debug.print("======PC hit 0x01b1ce! count={}\n", .{cnt});
-        }
+    for (0..900000_000) |_| {
         pic.execInstruction() catch |err| {
             // Dump memory to file
             var out_file = try std.Io.Dir.cwd().createFile(init.io, "dump.bin", .{ .truncate = true });

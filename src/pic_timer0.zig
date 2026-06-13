@@ -80,7 +80,7 @@ pub const PICTimer0 = struct {
             }
             if (self.timer_value == 0) {
                 if (pic.REGS.INTCON.GIE == 1 and pic.REGS.INTCON.TMR0IE == 1) {
-                    std.debug.print("Timer0 FIRED!!!!!!!! INTCON = {}\n", .{pic.REGS.INTCON});
+                    // std.debug.print("Timer0 FIRED!!!!!!!! INTCON = {}\n", .{pic.REGS.INTCON});
                     pic.STACK[pic.REGS.STKPTR.*] = pic.PC;
                     pic.REGS.STKPTR.* += 1;
                     pic.saveToShadow();
@@ -105,7 +105,7 @@ pub const PICTimer0 = struct {
     fn t0conWrite(handler: *SpecialFunctionRegisterHandler, _: *PIC18, _: u16, value: u8) PeripheralError!void {
         var self: *PICTimer0 = @alignCast(@fieldParentPtr("T0CON_REG_HANDLER", handler));
         self.t0con = @bitCast(value);
-        std.debug.print("Timer0 T0CON write 0x{}\n", .{self.t0con});
+        // std.debug.print("Timer0 T0CON write 0x{}\n", .{self.t0con});
     }
 
     fn tmr0hRead(handler: *SpecialFunctionRegisterHandler, pic: *PIC18, addr: u16) PeripheralError!u8 {
@@ -115,7 +115,7 @@ pub const PICTimer0 = struct {
 
     fn tmr0hWrite(handler: *SpecialFunctionRegisterHandler, pic: *PIC18, addr: u16, value: u8) PeripheralError!void {
         _ = @as(*PICTimer0, @alignCast(@fieldParentPtr("TMR0H_REG_HANDLER", handler)));
-        std.debug.print("Timer0 TMR0H write 0x{x}\n", .{value});
+        // std.debug.print("Timer0 TMR0H write 0x{x}\n", .{value});
         pic.MEM[addr] = value;
     }
 
@@ -126,7 +126,7 @@ pub const PICTimer0 = struct {
 
     fn tmr0lWrite(handler: *SpecialFunctionRegisterHandler, pic: *PIC18, addr: u16, value: u8) PeripheralError!void {
         _ = @as(*PICTimer0, @alignCast(@fieldParentPtr("TMR0L_REG_HANDLER", handler)));
-        std.debug.print("Timer0 TMR0L write 0x{x}\n", .{value});
+        // std.debug.print("Timer0 TMR0L write 0x{x}\n", .{value});
         pic.MEM[addr] = value;
     }
 };
