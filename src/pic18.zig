@@ -246,7 +246,7 @@ pub const PIC18 = struct {
         @memcpy(self.PROG[offset..][0..data.len], data);
     }
 
-    pub fn loadRom(self: *PIC18, reader: *std.io.Reader) !void {
+    pub fn loadRom(self: *PIC18, reader: *std.Io.Reader) !void {
         // clear program memory
         @memset(self.PROG, 0);
 

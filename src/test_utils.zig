@@ -13,15 +13,14 @@ pub fn asm2emu(asm_source: []const u8) !*pic18.PIC18 {
 
     defer tmp_dir.cleanup();
     {
-        const src_file = try tmp_dir.dir.createFile("a.asm", .{});
-        defer src_file.close();
-        try src_file.writeAll(prelude);
-        try src_file.writeAll(asm_source);
+        const src_file = try tmp_dir.dir.createFile(std.testing.io, "a.asm", .{});
+        defer src_file.close(std.testing.io);
+        try src_file.writeStreamingAll(std.testing.io, prelude);
+        try src_file.writeStreamingAll(std.testing.io, asm_source);
     }
 
-    const result = try std.process.Child.run(.{
-        .allocator = std.testing.allocator,
-        .cwd_dir = tmp_dir.dir,
+    const result = try std.process.run(std.testing.allocator, std.testing.io, .{
+        .cwd = .{ .dir = tmp_dir.dir },
         .argv = &.{ "gpasm", "-p", "18F67K22", "a.asm" },
     });
 
@@ -29,7 +28,7 @@ pub fn asm2emu(asm_source: []const u8) !*pic18.PIC18 {
     defer std.testing.allocator.free(result.stdout);
 
     switch (result.term) {
-        .Exited => |ret| {
+        .exited => |ret| {
             if (ret != 0) {
                 std.debug.print("\n\n======= GPASM OUT =======\n {s}\n======= END GPASM OUT =======\n", .{result.stdout});
             }
@@ -41,10 +40,10 @@ pub fn asm2emu(asm_source: []const u8) !*pic18.PIC18 {
     var pic = pic18.PIC18.init(std.testing.allocator);
 
     // load compiled data
-    var hexfile = try tmp_dir.dir.openFile("a.hex", .{ .mode = .read_only });
-    defer hexfile.close();
+    var hexfile = try tmp_dir.dir.openFile(std.testing.io, "a.hex", .{ .mode = .read_only });
+    defer hexfile.close(std.testing.io);
     var file_buffer: [1024]u8 = undefined;
-    var rdr = hexfile.reader(&file_buffer);
+    var rdr = hexfile.reader(std.testing.io, &file_buffer);
     try pic.loadRom(&rdr.interface);
     return pic;
 }
