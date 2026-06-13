@@ -354,7 +354,13 @@ pub const PIC18 = struct {
         return bank * 256 + addr;
     }
 
+    // Checks whether the access is done via indirect addressing (using the FSR registers),
+    // and acts accordingly
+    // Otheriwse returns the address as-is
     fn resolveIndirect(self: *PIC18, full_addr: u16) !u16 {
+        if (full_addr >= self.MEM.len) {
+            return error.OutOfBoundsMemoryAccess;
+        }
         const ptr = &self.MEM[full_addr];
         // FSR0 indirect
         if (ptr == self.REGS.INDF0) {
@@ -498,6 +504,11 @@ pub const PIC18 = struct {
         self.Timer0.tick(self);
         const instruction = self.consumeProgWord();
 
+        errdefer {
+            self.enableTrace = true;
+            self.printInstruction(instruction, "<----- ERROR\n", .{});
+        }
+
         const nibble1 = @as(u4, @intCast((instruction & 0xF000) >> 12));
         const nibble2 = @as(u4, @intCast((instruction & 0x0F00) >> 8));
         const nibble3 = @as(u4, @intCast((instruction & 0x00F0) >> 4));
@@ -574,6 +585,12 @@ pub const PIC18 = struct {
                     },
                     0b0001 => { // MOVLB Move literal to BSR
                         self.REGS.BSR.* = @intCast(instruction & 0x003F); // Load 6 bits only
+                    },
+                    0b1010 => { // XORLW - Exlusive OR Literal with W
+                        self.REGS.WREG.* = self.REGS.WREG.* ^ @as(u8, @intCast(instruction & 0x00FF));
+                        self.printInstruction(instruction, "XORLW 0x{x}\n", .{self.REGS.WREG.*});
+                        self.REGS.STATUS.*.Z = if (self.REGS.WREG.* == 0) 1 else 0;
+                        self.REGS.STATUS.*.N = if (self.REGS.WREG.* & 0x80 != 0) 1 else 0;
                     },
                     0b1101 => { // MULLW - Multiply Literal with W
                         const k: u16 = instruction & 0x00FF;
@@ -932,6 +949,14 @@ pub const PIC18 = struct {
             0b0110 => {
                 const use_bsr = (nibble2 & 0b0001) == 1;
                 switch (nibble2 & 0b1110) {
+                    0b0100 => { // CPFSGT - Compare f with W, Skip if f > W
+                        const val = try self.memReadBanked(use_bsr, @intCast(instruction & 0x00FF));
+                        self.printInstruction(instruction, "CPFSGT 0x{x}\n", .{instruction & 0x00FF});
+                        if (val > self.REGS.WREG.*) {
+                            self.PC += 2; // skip next instruction
+                            self.printInstruction(instruction, "CPFSGT skipping next instruction because f>W\n", .{});
+                        }
+                    },
                     0b1000 => { // SETF - Set f (to all ones)
                         self.printInstruction(instruction, "SETF 0x{x}\n", .{instruction & 0x00FF});
                         try self.memWriteBanked(use_bsr, @intCast(instruction & 0x00FF), 0xFF);
@@ -1078,7 +1103,11 @@ pub const PIC18 = struct {
                     else => return error.InvalidInstruction,
                 }
             },
-            else => return error.InvalidInstruction,
+            0b1111 => { // Indicates second word of a two-word instruction
+                // The only way to end up here is trying to skip over a two-word instruction by a branch instruction
+                // Do nothing, it is a NOP.
+                self.printInstruction(instruction, "DUMMY - skipped over two word instrctions", .{});
+            },
         }
     }
 
