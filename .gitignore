@@ -8,3 +8,5 @@ docgen_tmp/
 pilot.X.production.hex
 .gdb_history
 dump.bin
+zig-pkg/
+kcov-out

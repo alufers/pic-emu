@@ -85,4 +85,21 @@ pub fn build(b: *std.Build) void {
     // make the two of them run in parallel.
     const test_step = b.step("test", "Run tests");
     test_step.dependOn(&run_exe_tests.step);
+
+    const exe_tests_llvm = b.addTest(.{
+        .root_module = exe.root_module,
+        .use_llvm = true,
+    });
+
+    const kcov = b.addSystemCommand(&.{
+        "kcov",
+        "--clean",
+        "--include-path=src",
+        "kcov-out",
+    });
+
+    kcov.addArtifactArg(exe_tests_llvm);
+
+    const coverage_step = b.step("coverage", "Generate test coverage (kcov)");
+    coverage_step.dependOn(&kcov.step);
 }
