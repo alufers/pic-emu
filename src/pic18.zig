@@ -3,6 +3,7 @@ const ihex = @import("ihex.zig");
 const gpio = @import("gpio.zig");
 const PICGPIOPort = @import("pic_gpio_port.zig").PICGPIOPort;
 const PICMSSP = @import("pic_mssp.zig").PICMSSP;
+const PICTimer0 = @import("pic_timer0.zig").PICTimer0;
 
 const readInt = std.mem.readInt;
 
@@ -116,6 +117,7 @@ pub const PIC18 = struct {
     GPIOPortG: PICGPIOPort,
     MSSP1: PICMSSP,
     MSSP2: PICMSSP,
+    Timer0: PICTimer0,
 
     pub fn init(allocator: std.mem.Allocator) *PIC18 {
         // Allocate full 2Mbyte program memory space
@@ -178,6 +180,7 @@ pub const PIC18 = struct {
         };
         pic.MSSP1 = PICMSSP.init();
         pic.MSSP2 = PICMSSP.init();
+        pic.Timer0 = PICTimer0.init();
         pic.GPIOPortA = PICGPIOPort.init();
         pic.GPIOPortB = PICGPIOPort.init();
         pic.GPIOPortC = PICGPIOPort.init();
@@ -213,6 +216,10 @@ pub const PIC18 = struct {
         pic.SFRHandlers[0xF86 - 0xF00] = &pic.GPIOPortG.PORT_REG_HANDLER;
         pic.SFRHandlers[0xF98 - 0xF00] = &pic.GPIOPortG.TRIS_REG_HANDLER;
         pic.SFRHandlers[0xF8F - 0xF00] = &pic.GPIOPortG.LAT_REG_HANDLER;
+
+        pic.SFRHandlers[0xFD5 - 0xF00] = &pic.Timer0.T0CON_REG_HANDLER;
+        pic.SFRHandlers[0xFD7 - 0xF00] = &pic.Timer0.TMR0H_REG_HANDLER;
+        pic.SFRHandlers[0xFD6 - 0xF00] = &pic.Timer0.TMR0L_REG_HANDLER;
 
         pic.SFRHandlers[0xFC9 - 0xF00] = &pic.MSSP1.BUF_REG_HANDLER;
         pic.SFRHandlers[0xFC8 - 0xF00] = &pic.MSSP1.ADD_REG_HANDLER;
