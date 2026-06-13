@@ -83,6 +83,7 @@ pub const PICTimer0 = struct {
                     std.debug.print("Timer0 FIRED!!!!!!!! INTCON = {}\n", .{pic.REGS.INTCON});
                     pic.STACK[pic.REGS.STKPTR.*] = pic.PC;
                     pic.REGS.STKPTR.* += 1;
+                    pic.saveToShadow();
                     pic.REGS.INTCON.GIE = 0;
                     pic.REGS.INTCON.TMR0IF = 1;
                     pic.PC = 0x0008;
