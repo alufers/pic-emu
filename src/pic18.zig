@@ -139,6 +139,8 @@ pub const PIC18 = struct {
 
     allocator: std.mem.Allocator,
 
+    enableTrace: bool,
+
     PROG: []u8,
     configuration_bytes: []u8,
 
@@ -291,6 +293,9 @@ pub const PIC18 = struct {
                 h.reset(pic, 0xF00 + @as(u16, @intCast(offset)));
             }
         }
+
+        pic.enableTrace = false;
+
         return pic;
     }
 
@@ -323,6 +328,12 @@ pub const PIC18 = struct {
         if (!cond) {
             std.debug.print("EMULATOR CHECK FAILED AT PC 0x{x}: " ++ fmt ++ "\n", .{self.PC} ++ args);
             return error.EmulatorError;
+        }
+    }
+
+    fn printInstruction(self: *PIC18, instr: u16, comptime fmt: []const u8, args: anytype) void {
+        if (self.enableTrace) {
+            std.debug.print("0x{x:0>4} INST: {b:0>16} (0x{x:0>4}) " ++ fmt, .{ self.PC - 2, instr, instr } ++ args);
         }
     }
 
@@ -486,7 +497,7 @@ pub const PIC18 = struct {
     pub fn execInstruction(self: *PIC18) !void {
         self.Timer0.tick(self);
         const instruction = self.consumeProgWord();
-        std.debug.print("0x{x:0>4} INST: {b:0>16} (0x{x:0>4})\n", .{ self.PC - 2, instruction, instruction });
+
         const nibble1 = @as(u4, @intCast((instruction & 0xF000) >> 12));
         const nibble2 = @as(u4, @intCast((instruction & 0x0F00) >> 8));
         const nibble3 = @as(u4, @intCast((instruction & 0x00F0) >> 4));
@@ -498,9 +509,9 @@ pub const PIC18 = struct {
                         switch (nibble3) {
                             0b0000 => {
                                 if (nibble4 == 0b000) {
-                                    std.debug.print("NOP\n", .{});
+                                    self.printInstruction(instruction, "NOP\n", .{});
                                 } else if (nibble4 == 0b0100) {
-                                    std.debug.print("CLRWDT\n", .{});
+                                    self.printInstruction(instruction, "CLRWDT\n", .{});
                                     @as(*u8, @ptrCast(&self.REGS.STATUS)).* = 0x00;
                                     self.REGS.STATUS.*.TO = 1;
                                     self.REGS.STATUS.*.PD = 1;
@@ -515,7 +526,7 @@ pub const PIC18 = struct {
                                     if (mm == 3) {
                                         tblptr += 1;
                                     }
-                                    std.debug.print("TBLRD mm={}, tblptr=0x{x}\n", .{ mm, tblptr });
+                                    self.printInstruction(instruction, "TBLRD mm={}, tblptr=0x{x}\n", .{ mm, tblptr });
                                     self.REGS.TBLAT.* = self.PROG[tblptr];
                                     if (mm == 1) {
                                         tblptr += 1;
@@ -553,7 +564,7 @@ pub const PIC18 = struct {
                                         self.REGS.STKPTR.* -= 1;
                                         self.PC = self.STACK[self.REGS.STKPTR.*];
 
-                                        std.debug.print("RETURN to 0x{x} (SP={})\n", .{ self.PC, self.REGS.STKPTR.* });
+                                        self.printInstruction(instruction, "RETURN to 0x{x} (SP={})\n", .{ self.PC, self.REGS.STKPTR.* });
                                     },
                                     else => return error.InvalidInstruction,
                                 }
@@ -569,7 +580,7 @@ pub const PIC18 = struct {
                         const result: u16 = @as(u16, self.REGS.WREG.*) * k;
                         self.REGS.PRODH.* = @intCast(result >> 8);
                         self.REGS.PRODL.* = @intCast(result & 0xFF);
-                        std.debug.print("MULLW 0x{x} -> PRODH=0x{x} PRODL=0x{x}\n", .{ k, self.REGS.PRODH.*, self.REGS.PRODL.* });
+                        self.printInstruction(instruction, "MULLW 0x{x} -> PRODH=0x{x} PRODL=0x{x}\n", .{ k, self.REGS.PRODH.*, self.REGS.PRODL.* });
                     },
                     0b0100, 0b0101, 0b0110, 0b0111 => { // DECF Decrement f
 
@@ -578,7 +589,7 @@ pub const PIC18 = struct {
                         const dest_in_ram = (nibble2 & 0b0010) == 0b10; // If 'd' is '0', the result is stored in W. If 'd' is '1', the result is stored back in the register 'f' (default).
                         const use_bsr = (nibble2 & 0b0001) == 1; // If 'a' is '0', the Access Bank is selected. If 'a' is '1', the BSR is used to select the GPR bank.
 
-                        std.debug.print("DECF use_bsr={} dest_in_ram={}  0x{x}\n", .{
+                        self.printInstruction(instruction, "DECF use_bsr={} dest_in_ram={}  0x{x}\n", .{
                             use_bsr,
                             dest_in_ram,
                             instruction & 0x00FF,
@@ -598,13 +609,13 @@ pub const PIC18 = struct {
                     },
                     0b1001 => { // IORLW - Inclusive OR Literal with W
                         self.REGS.WREG.* = self.REGS.WREG.* | @as(u8, @intCast(instruction & 0x00FF));
-                        std.debug.print("IORLW 0x{x}\n", .{self.REGS.WREG.*});
+                        self.printInstruction(instruction, "IORLW 0x{x}\n", .{self.REGS.WREG.*});
                         self.REGS.STATUS.*.Z = if (self.REGS.WREG.* == 0) 1 else 0;
                         self.REGS.STATUS.*.N = if (self.REGS.WREG.* & 0x80 != 0) 1 else 0;
                     },
                     0b1011 => { // ANDLW - AND Literal with W
                         self.REGS.WREG.* = self.REGS.WREG.* & @as(u8, @intCast(instruction & 0x00FF));
-                        std.debug.print("ANDLW 0x{x}\n", .{self.REGS.WREG.*});
+                        self.printInstruction(instruction, "ANDLW 0x{x}\n", .{self.REGS.WREG.*});
                         self.REGS.STATUS.*.Z = if (self.REGS.WREG.* == 0) 1 else 0;
                         self.REGS.STATUS.*.N = if (self.REGS.WREG.* & 0x80 != 0) 1 else 0;
                     },
@@ -613,11 +624,11 @@ pub const PIC18 = struct {
                         self.REGS.STKPTR.* -= 1;
                         self.PC = self.STACK[self.REGS.STKPTR.*];
                         self.REGS.WREG.* = @intCast(instruction & 0x00FF);
-                        std.debug.print("RETLW 0x{x}, return to 0x{x}\n", .{ self.REGS.WREG.*, self.PC });
+                        self.printInstruction(instruction, "RETLW 0x{x}, return to 0x{x}\n", .{ self.REGS.WREG.*, self.PC });
                     },
                     0b1110 => { // MOVLW - Move Literal to W
                         self.REGS.WREG.* = @intCast(instruction & 0x00FF);
-                        std.debug.print("MOVLW 0x{x}\n", .{self.REGS.WREG.*});
+                        self.printInstruction(instruction, "MOVLW 0x{x}\n", .{self.REGS.WREG.*});
                     },
                     else => return error.InvalidInstruction,
                 }
@@ -627,7 +638,7 @@ pub const PIC18 = struct {
                 const use_bsr = (nibble2 & 0b0001) == 1; // if 0 the result is saved to WREG, otherwise it is saved back in the same register (the purpose is to set the Zero status)
                 switch (nibble2 & 0b1100) {
                     0b0000 => { // IORWF - Inclusive OR W with f
-                        std.debug.print("IORWF use_bsr={} dest_in_ram={}  0x{x}\n", .{
+                        self.printInstruction(instruction, "IORWF use_bsr={} dest_in_ram={}  0x{x}\n", .{
                             use_bsr,
                             dest_in_ram,
                             instruction & 0x00FF,
@@ -642,7 +653,7 @@ pub const PIC18 = struct {
                         self.REGS.STATUS.*.N = if (val & 0x80 != 0) 1 else 0;
                     },
                     0b0100 => { // ANDWF - AND W with f
-                        std.debug.print("ANDWF use_bsr={} dest_in_ram={}  0x{x}\n", .{
+                        self.printInstruction(instruction, "ANDWF use_bsr={} dest_in_ram={}  0x{x}\n", .{
                             use_bsr,
                             dest_in_ram,
                             instruction & 0x00FF,
@@ -657,7 +668,7 @@ pub const PIC18 = struct {
                         self.REGS.STATUS.*.N = if (val & 0x80 != 0) 1 else 0;
                     },
                     0b1000 => { // XORWF - Exclusive OR W with f
-                        std.debug.print("XORWF use_bsr={} dest_in_ram={}  0x{x}\n", .{
+                        self.printInstruction(instruction, "XORWF use_bsr={} dest_in_ram={}  0x{x}\n", .{
                             use_bsr,
                             dest_in_ram,
                             instruction & 0x00FF,
@@ -679,7 +690,7 @@ pub const PIC18 = struct {
                 const use_bsr = (nibble2 & 0b0001) == 1;
                 switch (nibble2 & 0b1100) {
                     0b0000 => { // ADDWFC - Add W and Carry to f
-                        std.debug.print("ADDWFC use_bsr={} dest_in_ram={}  0x{x}\n", .{
+                        self.printInstruction(instruction, "ADDWFC use_bsr={} dest_in_ram={}  0x{x}\n", .{
                             use_bsr,
                             dest_in_ram,
                             instruction & 0x00FF,
@@ -700,7 +711,7 @@ pub const PIC18 = struct {
                         self.REGS.STATUS.*.OV = if (((~(f ^ w)) & (f ^ val) & 0x80) != 0) 1 else 0;
                     },
                     0b0100 => { // ADDWF - Add W to f
-                        std.debug.print("ADDWF use_bsr={} dest_in_ram={}  0x{x}\n", .{
+                        self.printInstruction(instruction, "ADDWF use_bsr={} dest_in_ram={}  0x{x}\n", .{
                             use_bsr,
                             dest_in_ram,
                             instruction & 0x00FF,
@@ -720,7 +731,7 @@ pub const PIC18 = struct {
                         self.REGS.STATUS.*.OV = if (((~(f ^ w)) & (f ^ val) & 0x80) != 0) 1 else 0;
                     },
                     0b1000 => { // INCF - Increment f
-                        std.debug.print("INCF use_bsr={} dest_in_ram={}  0x{x}\n", .{
+                        self.printInstruction(instruction, "INCF use_bsr={} dest_in_ram={}  0x{x}\n", .{
                             use_bsr,
                             dest_in_ram,
                             instruction & 0x00FF,
@@ -739,7 +750,7 @@ pub const PIC18 = struct {
                         self.REGS.STATUS.*.OV = if (f == 0x7F) 1 else 0;
                     },
                     0b1100 => { // DECFSZ - Decrement f, Skip if 0
-                        std.debug.print("DECFSZ use_bsr={} dest_in_ram={}  0x{x}\n", .{
+                        self.printInstruction(instruction, "DECFSZ use_bsr={} dest_in_ram={}  0x{x}\n", .{
                             use_bsr,
                             dest_in_ram,
                             instruction & 0x00FF,
@@ -760,7 +771,7 @@ pub const PIC18 = struct {
                 const use_bsr = (nibble2 & 0b0001) == 1;
                 switch (nibble2 & 0b1100) {
                     0b0000 => { // RRCF - Rotate Right f through Carry
-                        std.debug.print("RRCF use_bsr={} dest_in_ram={}  0x{x}\n", .{
+                        self.printInstruction(instruction, "RRCF use_bsr={} dest_in_ram={}  0x{x}\n", .{
                             use_bsr,
                             dest_in_ram,
                             instruction & 0x00FF,
@@ -778,7 +789,7 @@ pub const PIC18 = struct {
                         }
                     },
                     0b0100 => { // RLCF - Rotate Left f through Carry
-                        std.debug.print("RLCF use_bsr={} dest_in_ram={}  0x{x}\n", .{
+                        self.printInstruction(instruction, "RLCF use_bsr={} dest_in_ram={}  0x{x}\n", .{
                             use_bsr,
                             dest_in_ram,
                             instruction & 0x00FF,
@@ -796,7 +807,7 @@ pub const PIC18 = struct {
                         }
                     },
                     0b1000 => { // SWAPF - Swap nibbles of f
-                        std.debug.print("SWAPF use_bsr={} dest_in_ram={}  0x{x}\n", .{
+                        self.printInstruction(instruction, "SWAPF use_bsr={} dest_in_ram={}  0x{x}\n", .{
                             use_bsr,
                             dest_in_ram,
                             instruction & 0x00FF,
@@ -817,7 +828,7 @@ pub const PIC18 = struct {
                 const use_bsr = (nibble2 & 0b0001) == 1;
                 switch (nibble2 & 0b1100) {
                     0b0100 => { // RLNCF - Rotate Left f (No Carry)
-                        std.debug.print("RLNCF use_bsr={} dest_in_ram={}  0x{x}\n", .{
+                        self.printInstruction(instruction, "RLNCF use_bsr={} dest_in_ram={}  0x{x}\n", .{
                             use_bsr,
                             dest_in_ram,
                             instruction & 0x00FF,
@@ -833,7 +844,7 @@ pub const PIC18 = struct {
                         }
                     },
                     0b1000 => { // INFSNZ - Increment f, Skip if not 0
-                        std.debug.print("INFSNZ use_bsr={} dest_in_ram={}  0x{x}\n", .{
+                        self.printInstruction(instruction, "INFSNZ use_bsr={} dest_in_ram={}  0x{x}\n", .{
                             use_bsr,
                             dest_in_ram,
                             instruction & 0x00FF,
@@ -843,7 +854,7 @@ pub const PIC18 = struct {
                         const val, _ = @addWithOverflow(f, 1);
                         if (val != 0) {
                             self.PC += 2; // skip next instruction
-                            std.debug.print("INFSNZ skipping next instruction because result is nonzero\n", .{});
+                            self.printInstruction(instruction, "INFSNZ skipping next instruction because result is nonzero\n", .{});
                         }
                         if (dest_in_ram) {
                             try self.memWriteBanked(use_bsr, @intCast(instruction & 0x00FF), val);
@@ -859,7 +870,7 @@ pub const PIC18 = struct {
                 const use_bsr = (nibble2 & 0b0001) == 1; // if 0 the result is saved to WREG, otherwise it is saved back in the same register (the purpose is to set the Zero status)
                 switch (nibble2 & 0b1100) {
                     0b0000 => { // MOVF
-                        std.debug.print("MOVF use_bsr={} dest_in_ram={}  0x{x}\n", .{
+                        self.printInstruction(instruction, "MOVF use_bsr={} dest_in_ram={}  0x{x}\n", .{
                             use_bsr,
                             dest_in_ram,
                             instruction & 0x00FF,
@@ -874,7 +885,7 @@ pub const PIC18 = struct {
                         self.REGS.STATUS.*.N = if (val & 0x80 != 0) 1 else 0;
                     },
                     0b1000 => { // SUBWFB - Subtract W from f with Borrow
-                        std.debug.print("SUBWFB use_bsr={} dest_in_ram={}  0x{x}\n", .{
+                        self.printInstruction(instruction, "SUBWFB use_bsr={} dest_in_ram={}  0x{x}\n", .{
                             use_bsr,
                             dest_in_ram,
                             instruction & 0x00FF,
@@ -896,7 +907,7 @@ pub const PIC18 = struct {
                         self.REGS.STATUS.*.OV = if (((f ^ w) & (f ^ val) & 0x80) != 0) 1 else 0;
                     },
                     0b1100 => { // SUBWF - Subtract W from f
-                        std.debug.print("SUBWF use_bsr={} dest_in_ram={}  0x{x}\n", .{
+                        self.printInstruction(instruction, "SUBWF use_bsr={} dest_in_ram={}  0x{x}\n", .{
                             use_bsr,
                             dest_in_ram,
                             instruction & 0x00FF,
@@ -922,16 +933,16 @@ pub const PIC18 = struct {
                 const use_bsr = (nibble2 & 0b0001) == 1;
                 switch (nibble2 & 0b1110) {
                     0b1000 => { // SETF - Set f (to all ones)
-                        std.debug.print("SETF 0x{x}\n", .{instruction & 0x00FF});
+                        self.printInstruction(instruction, "SETF 0x{x}\n", .{instruction & 0x00FF});
                         try self.memWriteBanked(use_bsr, @intCast(instruction & 0x00FF), 0xFF);
                     },
                     0b1010 => { // CLRF Clear register f
-                        std.debug.print("CLRF 0x{x}\n", .{instruction & 0x00FF});
+                        self.printInstruction(instruction, "CLRF 0x{x}\n", .{instruction & 0x00FF});
                         try self.memWriteBanked(use_bsr, @intCast(instruction & 0x00FF), 0);
                         self.REGS.STATUS.*.Z = 1;
                     },
                     0b1110 => { // MOVWF Move W to f
-                        std.debug.print("MOVWF 0x{x}\n", .{instruction & 0x00FF});
+                        self.printInstruction(instruction, "MOVWF 0x{x}\n", .{instruction & 0x00FF});
                         try self.memWriteBanked(use_bsr, @intCast(instruction & 0x00FF), self.REGS.WREG.*);
                     },
                     else => return error.InvalidInstruction,
@@ -940,42 +951,42 @@ pub const PIC18 = struct {
             0b1000 => { // BSF bit set f
                 const bit_num: u3 = @intCast((nibble2 & 0b1110) >> 1);
                 const use_bsr = (nibble2 & 0b0001) == 1;
-                std.debug.print("BSF bit_num={} use_bsr={} 0x{x}\n", .{ bit_num, use_bsr, instruction & 0x00FF });
+                self.printInstruction(instruction, "BSF bit_num={} use_bsr={} 0x{x}\n", .{ bit_num, use_bsr, instruction & 0x00FF });
                 const val = try self.memReadBanked(use_bsr, @intCast(instruction & 0x00FF)) | (@as(u8, 1) << bit_num);
                 try self.memWriteBanked(use_bsr, @intCast(instruction & 0x00FF), val);
             },
             0b1010 => { // BTFSS - Bit Test File, Skip if Set
                 const bit_num: u3 = @intCast((nibble2 & 0b1110) >> 1);
                 const use_bsr = (nibble2 & 0b0001) == 1;
-                std.debug.print("BTFSS bit_num={} use_bsr={} 0x{x}\n", .{ bit_num, use_bsr, instruction & 0x00FF });
+                self.printInstruction(instruction, "BTFSS bit_num={} use_bsr={} 0x{x}\n", .{ bit_num, use_bsr, instruction & 0x00FF });
                 const val = try self.memReadBanked(use_bsr, @intCast(instruction & 0x00FF));
                 if ((val & (@as(u8, 1) << bit_num)) != 0) {
                     self.PC += 2; // skip next instruction
-                    std.debug.print("BTFSS skipping next instruction because bit is set\n", .{});
+                    self.printInstruction(instruction, "BTFSS skipping next instruction because bit is set\n", .{});
                 }
             },
             0b1011 => { // BTFSC - Bit Test File, Skip if Clear
                 const bit_num: u3 = @intCast((nibble2 & 0b1110) >> 1);
                 const use_bsr = (nibble2 & 0b0001) == 1;
-                std.debug.print("BTFSC bit_num={} use_bsr={} 0x{x}\n", .{ bit_num, use_bsr, instruction & 0x00FF });
+                self.printInstruction(instruction, "BTFSC bit_num={} use_bsr={} 0x{x}\n", .{ bit_num, use_bsr, instruction & 0x00FF });
                 const val = try self.memReadBanked(use_bsr, @intCast(instruction & 0x00FF));
                 if ((val & (@as(u8, 1) << bit_num)) == 0) {
                     self.PC += 2; // skip next instruction
-                    std.debug.print("BTFSC skipping next instruction because bit is clear\n", .{});
+                    self.printInstruction(instruction, "BTFSC skipping next instruction because bit is clear\n", .{});
                 }
             },
 
             0b1001 => { // BCF Bit Clear f
                 const bit_num: u3 = @intCast((nibble2 & 0b1110) >> 1);
                 const use_bsr = (nibble2 & 0b0001) == 1;
-                std.debug.print("BCF bit_num={} use_bsr={} 0x{x}\n", .{ bit_num, use_bsr, instruction & 0x00FF });
+                self.printInstruction(instruction, "BCF bit_num={} use_bsr={} 0x{x}\n", .{ bit_num, use_bsr, instruction & 0x00FF });
                 const val = try self.memReadBanked(use_bsr, @intCast(instruction & 0x00FF)) & ~(@as(u8, 1) << bit_num);
                 try self.memWriteBanked(use_bsr, @intCast(instruction & 0x00FF), val);
             },
             0b0111 => { // BTG Bit Toggle f
                 const bit_num: u3 = @intCast((nibble2 & 0b1110) >> 1);
                 const use_bsr = (nibble2 & 0b0001) == 1;
-                std.debug.print("BTG bit_num={} use_bsr={} 0x{x}\n", .{ bit_num, use_bsr, instruction & 0x00FF });
+                self.printInstruction(instruction, "BTG bit_num={} use_bsr={} 0x{x}\n", .{ bit_num, use_bsr, instruction & 0x00FF });
                 const val = try self.memReadBanked(use_bsr, @intCast(instruction & 0x00FF)) ^ (@as(u8, 1) << bit_num);
                 try self.memWriteBanked(use_bsr, @intCast(instruction & 0x00FF), val);
             },
@@ -985,7 +996,7 @@ pub const PIC18 = struct {
                 const fs = instruction & 0x0FFF;
                 const fd = second_word & 0x0FFF;
 
-                std.debug.print("MOVFF src=0x{x} dst=0x{x}\n", .{ fs, fd });
+                self.printInstruction(instruction, "MOVFF src=0x{x} dst=0x{x}\n", .{ fs, fd });
 
                 // resolve indirect handles side effects on FSRs
                 const indirect_fs = try self.resolveIndirect(fs);
@@ -998,7 +1009,7 @@ pub const PIC18 = struct {
                     0b0000 => { // BRA - Unconditional branch
                         const n: i11 = @bitCast(@as(u11, @intCast(instruction & 0b0000_0111_1111_1111)));
                         self.PC = @intCast(@as(i32, self.PC) + 2 * @as(i32, n));
-                        std.debug.print("BRA n={} -> PC=0x{x}\n", .{ n, self.PC });
+                        self.printInstruction(instruction, "BRA n={} -> PC=0x{x}\n", .{ n, self.PC });
                     },
                     else => return error.InvalidInstruction,
                 }
@@ -1010,28 +1021,28 @@ pub const PIC18 = struct {
                         if (self.REGS.STATUS.*.Z == 1) {
                             self.PC = @intCast(@as(i32, @intCast(self.PC)) + 2 * @as(i32, n));
                         }
-                        std.debug.print("BZ n={} Z={} -> PC=0x{x}\n", .{ n, self.REGS.STATUS.*.Z, self.PC });
+                        self.printInstruction(instruction, "BZ n={} Z={} -> PC=0x{x}\n", .{ n, self.REGS.STATUS.*.Z, self.PC });
                     },
                     0b0001 => { // BNZ - Branch if Not Zero
                         const n: i8 = @bitCast(@as(u8, @intCast(instruction & 0x00FF)));
                         if (self.REGS.STATUS.*.Z == 0) {
                             self.PC = @intCast(@as(i32, @intCast(self.PC)) + 2 * @as(i32, n));
                         }
-                        std.debug.print("BNZ n={} Z={} -> PC=0x{x}\n", .{ n, self.REGS.STATUS.*.Z, self.PC });
+                        self.printInstruction(instruction, "BNZ n={} Z={} -> PC=0x{x}\n", .{ n, self.REGS.STATUS.*.Z, self.PC });
                     },
                     0b0010 => { // BC - Branch if Carry
                         const n: i8 = @bitCast(@as(u8, @intCast(instruction & 0x00FF)));
                         if (self.REGS.STATUS.*.C == 1) {
                             self.PC = @intCast(@as(i32, @intCast(self.PC)) + 2 * @as(i32, n));
                         }
-                        std.debug.print("BC n={} C={} -> PC=0x{x}\n", .{ n, self.REGS.STATUS.*.C, self.PC });
+                        self.printInstruction(instruction, "BC n={} C={} -> PC=0x{x}\n", .{ n, self.REGS.STATUS.*.C, self.PC });
                     },
                     0b0011 => { // BNC - Branch if Not Carry
                         const n: i8 = @bitCast(@as(u8, @intCast(instruction & 0x00FF)));
                         if (self.REGS.STATUS.*.C == 0) {
                             self.PC = @intCast(@as(i32, @intCast(self.PC)) + 2 * @as(i32, n));
                         }
-                        std.debug.print("BNC n={} C={} -> PC=0x{x}\n", .{ n, self.REGS.STATUS.*.C, self.PC });
+                        self.printInstruction(instruction, "BNC n={} C={} -> PC=0x{x}\n", .{ n, self.REGS.STATUS.*.C, self.PC });
                     },
                     0b1100, 0b1101 => { // CALL - Call subroutine
                         const use_shadow = (nibble2 & 0b0001) == 1;
@@ -1045,7 +1056,7 @@ pub const PIC18 = struct {
                         try self.check(self.REGS.STKPTR.* < self.STACK.len, "stack overflow not implemented", .{}); // TODO: implement stack overflow handling
                         self.STACK[self.REGS.STKPTR.*] = self.PC;
                         self.REGS.STKPTR.* += 1;
-                        std.debug.print("CALL to 0x{x} (PC=0x{x})\n", .{ self.PC, (@as(u21, second_word & 0x0FFF) << 9) | (@as(u21, instruction & 0x00FF) << 1) });
+                        self.printInstruction(instruction, "CALL to 0x{x} (PC=0x{x})\n", .{ self.PC, (@as(u21, second_word & 0x0FFF) << 9) | (@as(u21, instruction & 0x00FF) << 1) });
                         self.PC = (@as(u21, second_word & 0x0FFF) << 9) | (@as(u21, instruction & 0x00FF) << 1);
                     },
                     0b1110 => { // LFSR - Load FSR (File select register)
@@ -1054,7 +1065,7 @@ pub const PIC18 = struct {
                         const second_word = self.consumeProgWord();
                         try self.check((second_word & 0xF000) >> 12 == 0b1111, "invalid LFSR", .{});
                         const val = (instruction & 0x000F) << 8 | (second_word & 0x0FFF);
-                        std.debug.print("LFSR: num={} 0x{x}\n", .{ FSR_num, val });
+                        self.printInstruction(instruction, "LFSR: num={} 0x{x}\n", .{ FSR_num, val });
                         try self.setFSR(FSR_num, val);
                     },
                     0b1111 => { // GOTO
@@ -1062,7 +1073,7 @@ pub const PIC18 = struct {
                         try self.check((second_word & 0xF000) >> 12 == 0b1111, "invalid GOTO", .{});
 
                         self.PC = (@as(u21, second_word & 0x0FFF) << 9) | (@as(u21, instruction & 0x00FF) << 1);
-                        std.debug.print("GOTO ({b} {b}): 0x{x}\n", .{ instruction, second_word, self.PC });
+                        self.printInstruction(instruction, "GOTO ({b} {b}): 0x{x}\n", .{ instruction, second_word, self.PC });
                     },
                     else => return error.InvalidInstruction,
                 }
