@@ -97,3 +97,24 @@ test "writes GPIO pin" {
     try std.testing.expectEqual(true, pin_handler1.val);
     try std.testing.expectEqual(true, pin_handler2.val);
 }
+
+test "can skip over two word instructions" {
+    var pic = try asm2emu(
+        \\      BTFSC 0x10, 3, 0   ; bit 3 of 0x00 = 0 -> skip
+        \\      GOTO 0x99
+        \\      MOVLW 0x11         ; WREG = 0x11 (skip happened)
+        \\  END
+    );
+    defer pic.deinit();
+    pic.MEM[0x10] = 0x00; // bit 3 = 0 -> skip
+    pic.MEM[0x11] = 0x08; // bit 3 = 1 -> no skip
+    pic.MEM[0x220] = 0x03; // bit 5 = 0 -> skip
+
+    try pic.execInstruction(); // BTFSC 0x10, 3 -> skip
+    try pic.execInstruction(); // GOTO 0x99 (1st word)
+    try pic.execInstruction(); // GOTO 0x99 (2nd word)
+    try pic.execInstruction(); // GOTO 0x99 (2nd word)
+    try std.testing.expectEqual(0x11, pic.REGS.WREG.*);
+
+    // Status Affected: None
+}
