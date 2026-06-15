@@ -2,6 +2,7 @@ const std = @import("std");
 const gpio = @import("gpio.zig");
 
 const PIC18 = @import("pic18.zig").PIC18;
+const spi_flash = @import("spi_flash.zig");
 
 test {
     _ = @import("instr_test.zig");
@@ -29,7 +30,11 @@ pub fn main(init: std.process.Init) !void {
 
     pic.GPIOPortA.pins[5] = &spi_cs_pin.interface;
 
-    for (0..900000_000) |_| {
+    var data_flash = spi_flash.SPIFlash.init();
+
+    pic.MSSP2.slave = &data_flash.spiSlaveInterface;
+
+    for (0..300000_000) |_| {
         pic.execInstruction() catch |err| {
             // Dump memory to file
             var out_file = try std.Io.Dir.cwd().createFile(init.io, "dump.bin", .{ .truncate = true });
@@ -38,7 +43,4 @@ pub fn main(init: std.process.Init) !void {
             return err;
         };
     }
-
-    std.debug.print("INTCON val {}\n", .{pic.REGS.INTCON});
-    std.debug.print("t0 val timer_value {}\n", .{pic.Timer0.timer_value});
 }

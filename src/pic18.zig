@@ -232,8 +232,8 @@ pub const PIC18 = struct {
             .RCON = @ptrCast(&mem[0x0FD0]),
             .INTCON = @ptrCast(&mem[0x0FF2]),
         };
-        pic.MSSP1 = PICMSSP.init();
-        pic.MSSP2 = PICMSSP.init();
+        pic.MSSP1 = PICMSSP.init(1);
+        pic.MSSP2 = PICMSSP.init(2);
         pic.Timer0 = PICTimer0.init();
         pic.GPIOPortA = PICGPIOPort.init();
         pic.GPIOPortB = PICGPIOPort.init();

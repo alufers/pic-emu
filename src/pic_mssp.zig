@@ -3,6 +3,7 @@ const pic18 = @import("pic18.zig");
 const SpecialFunctionRegisterHandler = pic18.SpecialFunctionRegisterHandler;
 const PIC18 = pic18.PIC18;
 const PeripheralError = pic18.PeripheralError;
+const spi_slave = @import("spi_slave.zig");
 
 pub const SSPxSTAT = packed struct {
     /// BF: Buffer Full Status bit (Receive mode only).
@@ -70,8 +71,13 @@ pub const PICMSSP = struct {
 
     stat_reg: SSPxSTAT,
     con1_reg: SSPxCON1,
+    BUF: u8, // Data received from the slave
 
-    pub fn init() PICMSSP {
+    idx: u8, // which MSSP peripheral is it
+
+    slave: ?*spi_slave.SPISlave,
+
+    pub fn init(idx: u8) PICMSSP {
         return PICMSSP{
             .BUF_REG_HANDLER = .{
                 .vtable = &.{
@@ -103,72 +109,83 @@ pub const PICMSSP = struct {
                     .write = con2Write,
                 },
             },
-
+            .idx = idx,
             .stat_reg = @bitCast(@as(u8, 0)),
             .con1_reg = @bitCast(@as(u8, 0)),
+            .BUF = 0,
+            .slave = null,
         };
     }
 
     fn bufRead(handler: *SpecialFunctionRegisterHandler, _: *PIC18, _: u16) PeripheralError!u8 {
         var self = @as(*PICMSSP, @alignCast(@fieldParentPtr("BUF_REG_HANDLER", handler)));
-        std.debug.print("MSSP BUF read\n", .{});
+        std.debug.print("MSSP{} BUF read\n", .{self.idx});
         self.stat_reg.BF = 0;
-        return 0;
+        return self.BUF;
     }
 
-    fn bufWrite(handler: *SpecialFunctionRegisterHandler, _: *PIC18, _: u16, value: u8) PeripheralError!void {
+    fn bufWrite(handler: *SpecialFunctionRegisterHandler, pic: *PIC18, _: u16, value: u8) PeripheralError!void {
         var self = @as(*PICMSSP, @alignCast(@fieldParentPtr("BUF_REG_HANDLER", handler)));
-        std.debug.print("MSSP BUF write 0x{x}\n", .{value});
+        std.debug.print("MSSP{} BUF write 0x{x}  PC= 0x{x}\n", .{ self.idx, value, pic.PC });
         // pic.MEM[addr] = value;
+        if (self.slave) |s| {
+            self.BUF = s.transact(value);
+        } else {
+            self.BUF = 0;
+        }
+
         self.stat_reg.BF = 1;
     }
 
     fn addRead(handler: *SpecialFunctionRegisterHandler, pic: *PIC18, addr: u16) PeripheralError!u8 {
-        _ = @as(*PICMSSP, @alignCast(@fieldParentPtr("ADD_REG_HANDLER", handler)));
-        std.debug.print("MSSP ADD read\n", .{});
+        const self = @as(*PICMSSP, @alignCast(@fieldParentPtr("ADD_REG_HANDLER", handler)));
+        std.debug.print("MSSP{} ADD read\n", .{self.idx});
         return pic.MEM[addr];
     }
 
     fn addWrite(handler: *SpecialFunctionRegisterHandler, pic: *PIC18, addr: u16, value: u8) PeripheralError!void {
-        _ = @as(*PICMSSP, @alignCast(@fieldParentPtr("ADD_REG_HANDLER", handler)));
-        std.debug.print("MSSP ADD write 0x{x}\n", .{value});
+        const self = @as(*PICMSSP, @alignCast(@fieldParentPtr("ADD_REG_HANDLER", handler)));
+        std.debug.print("MSSP{} ADD write 0x{x}\n", .{ self.idx, value });
         pic.MEM[addr] = value;
     }
 
     fn statRead(handler: *SpecialFunctionRegisterHandler, _: *PIC18, _: u16) PeripheralError!u8 {
         var self = @as(*PICMSSP, @alignCast(@fieldParentPtr("STAT_REG_HANDLER", handler)));
 
-        return (@as(*u8, @ptrCast(&self.stat_reg))).*; // Return the value of the STAT register instead of memory
+        return (@as(*u8, @ptrCast(&self.stat_reg))).*;
     }
 
     fn statWrite(handler: *SpecialFunctionRegisterHandler, _: *PIC18, _: u16, value: u8) PeripheralError!void {
         var self = @as(*PICMSSP, @alignCast(@fieldParentPtr("STAT_REG_HANDLER", handler)));
         const WRITABLE_BITS: u8 = 0b11000000;
-        std.debug.print("MSSP STAT write {}", .{value});
         self.stat_reg = @bitCast(value & WRITABLE_BITS | (@as(u8, @bitCast(self.stat_reg)) & ~WRITABLE_BITS));
+        std.debug.print("MSSP{} STAT write {}\n", .{ self.idx, self.stat_reg });
     }
 
-    fn con1Read(handler: *SpecialFunctionRegisterHandler, pic: *PIC18, addr: u16) PeripheralError!u8 {
-        _ = @as(*PICMSSP, @alignCast(@fieldParentPtr("CON1_REG_HANDLER", handler)));
-        std.debug.print("MSSP CON1 read\n", .{});
-        return pic.MEM[addr];
+    fn con1Read(handler: *SpecialFunctionRegisterHandler, _: *PIC18, _: u16) PeripheralError!u8 {
+        const self = @as(*PICMSSP, @alignCast(@fieldParentPtr("CON1_REG_HANDLER", handler)));
+        std.debug.print("MSSP{} CON1 read\n", .{self.idx});
+        return (@as(*u8, @ptrCast(&self.con1_reg))).*;
     }
 
-    fn con1Write(handler: *SpecialFunctionRegisterHandler, pic: *PIC18, addr: u16, value: u8) PeripheralError!void {
-        _ = @as(*PICMSSP, @alignCast(@fieldParentPtr("CON1_REG_HANDLER", handler)));
-        std.debug.print("MSSP CON1 write 0x{x}\n", .{value});
-        pic.MEM[addr] = value;
+    fn con1Write(handler: *SpecialFunctionRegisterHandler, _: *PIC18, _: u16, value: u8) PeripheralError!void {
+        var self = @as(*PICMSSP, @alignCast(@fieldParentPtr("CON1_REG_HANDLER", handler)));
+        self.con1_reg = @as(SSPxCON1, @bitCast(value));
+        std.debug.print("MSSP{} CON1 write {}\n", .{
+            self.idx,
+            self.con1_reg,
+        });
     }
 
     fn con2Read(handler: *SpecialFunctionRegisterHandler, pic: *PIC18, addr: u16) PeripheralError!u8 {
-        _ = @as(*PICMSSP, @alignCast(@fieldParentPtr("CON2_REG_HANDLER", handler)));
-        std.debug.print("MSSP CON2 read\n", .{});
+        const self = @as(*PICMSSP, @alignCast(@fieldParentPtr("CON2_REG_HANDLER", handler)));
+        std.debug.print("MSSP{} CON2 read\n", .{self.idx});
         return pic.MEM[addr];
     }
 
     fn con2Write(handler: *SpecialFunctionRegisterHandler, pic: *PIC18, addr: u16, value: u8) PeripheralError!void {
-        _ = @as(*PICMSSP, @alignCast(@fieldParentPtr("CON2_REG_HANDLER", handler)));
-        std.debug.print("MSSP CON2 write 0x{x}\n", .{value});
+        const self = @as(*PICMSSP, @alignCast(@fieldParentPtr("CON2_REG_HANDLER", handler)));
+        std.debug.print("MSSP{} CON2 write 0x{x}\n", .{ self.idx, value });
         pic.MEM[addr] = value;
     }
 };
