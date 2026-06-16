@@ -62,7 +62,7 @@ pub const SPIFlash = struct {
                         std.debug.print("[FLASH] Write Enable for Volatile Status Register\n", .{});
                     },
                     else => {
-                        std.debug.print("[FLASH] UNKNOWN SPI FLASH COMMAND: 0x{x}\n", .{in});
+                        // std.debug.print("[FLASH] UNKNOWN SPI FLASH COMMAND: 0x{x}\n", .{in});
                     },
                 }
             },

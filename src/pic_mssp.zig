@@ -119,14 +119,14 @@ pub const PICMSSP = struct {
 
     fn bufRead(handler: *SpecialFunctionRegisterHandler, _: *PIC18, _: u16) PeripheralError!u8 {
         var self = @as(*PICMSSP, @alignCast(@fieldParentPtr("BUF_REG_HANDLER", handler)));
-        std.debug.print("MSSP{} BUF read\n", .{self.idx});
+        // std.debug.print("MSSP{} BUF read\n", .{self.idx});
         self.stat_reg.BF = 0;
         return self.BUF;
     }
 
-    fn bufWrite(handler: *SpecialFunctionRegisterHandler, pic: *PIC18, _: u16, value: u8) PeripheralError!void {
+    fn bufWrite(handler: *SpecialFunctionRegisterHandler, _: *PIC18, _: u16, value: u8) PeripheralError!void {
         var self = @as(*PICMSSP, @alignCast(@fieldParentPtr("BUF_REG_HANDLER", handler)));
-        std.debug.print("MSSP{} BUF write 0x{x}  PC= 0x{x}\n", .{ self.idx, value, pic.PC });
+        // std.debug.print("MSSP{} BUF write 0x{x}  PC= 0x{x}\n", .{ self.idx, value, pic.PC });
         // pic.MEM[addr] = value;
         if (self.slave) |s| {
             self.BUF = s.transact(value);
@@ -138,14 +138,14 @@ pub const PICMSSP = struct {
     }
 
     fn addRead(handler: *SpecialFunctionRegisterHandler, pic: *PIC18, addr: u16) PeripheralError!u8 {
-        const self = @as(*PICMSSP, @alignCast(@fieldParentPtr("ADD_REG_HANDLER", handler)));
-        std.debug.print("MSSP{} ADD read\n", .{self.idx});
+        _ = @as(*PICMSSP, @alignCast(@fieldParentPtr("ADD_REG_HANDLER", handler)));
+        // std.debug.print("MSSP{} ADD read\n", .{self.idx});
         return pic.MEM[addr];
     }
 
     fn addWrite(handler: *SpecialFunctionRegisterHandler, pic: *PIC18, addr: u16, value: u8) PeripheralError!void {
-        const self = @as(*PICMSSP, @alignCast(@fieldParentPtr("ADD_REG_HANDLER", handler)));
-        std.debug.print("MSSP{} ADD write 0x{x}\n", .{ self.idx, value });
+        _ = @as(*PICMSSP, @alignCast(@fieldParentPtr("ADD_REG_HANDLER", handler)));
+        // std.debug.print("MSSP{} ADD write 0x{x}\n", .{ self.idx, value });
         pic.MEM[addr] = value;
     }
 
@@ -159,33 +159,33 @@ pub const PICMSSP = struct {
         var self = @as(*PICMSSP, @alignCast(@fieldParentPtr("STAT_REG_HANDLER", handler)));
         const WRITABLE_BITS: u8 = 0b11000000;
         self.stat_reg = @bitCast(value & WRITABLE_BITS | (@as(u8, @bitCast(self.stat_reg)) & ~WRITABLE_BITS));
-        std.debug.print("MSSP{} STAT write {}\n", .{ self.idx, self.stat_reg });
+        // std.debug.print("MSSP{} STAT write {}\n", .{ self.idx, self.stat_reg });
     }
 
     fn con1Read(handler: *SpecialFunctionRegisterHandler, _: *PIC18, _: u16) PeripheralError!u8 {
         const self = @as(*PICMSSP, @alignCast(@fieldParentPtr("CON1_REG_HANDLER", handler)));
-        std.debug.print("MSSP{} CON1 read\n", .{self.idx});
+        // std.debug.print("MSSP{} CON1 read\n", .{self.idx});
         return (@as(*u8, @ptrCast(&self.con1_reg))).*;
     }
 
     fn con1Write(handler: *SpecialFunctionRegisterHandler, _: *PIC18, _: u16, value: u8) PeripheralError!void {
         var self = @as(*PICMSSP, @alignCast(@fieldParentPtr("CON1_REG_HANDLER", handler)));
         self.con1_reg = @as(SSPxCON1, @bitCast(value));
-        std.debug.print("MSSP{} CON1 write {}\n", .{
-            self.idx,
-            self.con1_reg,
-        });
+        // std.debug.print("MSSP{} CON1 write {}\n", .{
+        //     self.idx,
+        //     self.con1_reg,
+        // });
     }
 
     fn con2Read(handler: *SpecialFunctionRegisterHandler, pic: *PIC18, addr: u16) PeripheralError!u8 {
-        const self = @as(*PICMSSP, @alignCast(@fieldParentPtr("CON2_REG_HANDLER", handler)));
-        std.debug.print("MSSP{} CON2 read\n", .{self.idx});
+        _ = @as(*PICMSSP, @alignCast(@fieldParentPtr("CON2_REG_HANDLER", handler)));
+        // std.debug.print("MSSP{} CON2 read\n", .{self.idx});
         return pic.MEM[addr];
     }
 
     fn con2Write(handler: *SpecialFunctionRegisterHandler, pic: *PIC18, addr: u16, value: u8) PeripheralError!void {
-        const self = @as(*PICMSSP, @alignCast(@fieldParentPtr("CON2_REG_HANDLER", handler)));
-        std.debug.print("MSSP{} CON2 write 0x{x}\n", .{ self.idx, value });
+        _ = @as(*PICMSSP, @alignCast(@fieldParentPtr("CON2_REG_HANDLER", handler)));
+        // std.debug.print("MSSP{} CON2 write 0x{x}\n", .{ self.idx, value });
         pic.MEM[addr] = value;
     }
 };

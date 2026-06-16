@@ -28,13 +28,13 @@ pub const GPIOPin = struct {
     }
 };
 
-fn nopSetMode(_: *GPIOPin, _: GPIOMode) void {}
+pub fn nopSetMode(_: *GPIOPin, _: GPIOMode) void {}
 
-fn nopRead(_: *GPIOPin) bool {
+pub fn nopRead(_: *GPIOPin) bool {
     return false;
 }
 
-fn nopWrite(_: *GPIOPin, _: bool) void {}
+pub fn nopWrite(_: *GPIOPin, _: bool) void {}
 
 pub const NOPGPIOPin: GPIOPin = .{
     .vtable = &.{

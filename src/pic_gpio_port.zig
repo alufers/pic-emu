@@ -68,7 +68,7 @@ pub const PICGPIOPort = struct {
                 }
             }
         }
-        return 0;
+        return result;
     }
 
     fn trisReset(_: *SpecialFunctionRegisterHandler, pic: *PIC18, addr: u16) void {
