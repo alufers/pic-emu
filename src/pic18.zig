@@ -604,6 +604,22 @@ pub const PIC18 = struct {
                         self.REGS.PRODL.* = @intCast(result & 0xFF);
                         self.printInstruction(instruction, "MULWF 0x{x} -> PRODH=0x{x} PRODL=0x{x}\n", .{ instruction & 0x00FF, self.REGS.PRODH.*, self.REGS.PRODL.* });
                     },
+                    0b1000 => { // SUBLW - Subtract W from Literal
+                        // Status affected = N, OV, C, DC, Z
+                        const k: u8 = @intCast(instruction & 0x00FF);
+
+                        const val, const overflow = @subWithOverflow(self.REGS.WREG.*, k);
+
+                        self.REGS.STATUS.*.Z = if (val == 0) 1 else 0;
+                        self.REGS.STATUS.*.N = if (val & 0x80 != 0) 1 else 0;
+                        self.REGS.STATUS.*.C = overflow;
+                        self.REGS.STATUS.*.DC = if (((self.REGS.WREG.* & 0xF) + (k & 0xF)) > 0xF) 1 else 0;
+                        self.REGS.STATUS.*.OV = if (((~(k ^ self.REGS.WREG.*)) & (k ^ val) & 0x80) != 0) 1 else 0;
+
+                        self.REGS.WREG.* = val;
+
+                        self.printInstruction(instruction, "SUBLW 0x{x}\n", .{self.REGS.WREG.*});
+                    },
                     0b1010 => { // XORLW - Exlusive OR Literal with W
                         self.REGS.WREG.* = self.REGS.WREG.* ^ @as(u8, @intCast(instruction & 0x00FF));
                         self.printInstruction(instruction, "XORLW 0x{x}\n", .{self.REGS.WREG.*});
@@ -681,7 +697,6 @@ pub const PIC18 = struct {
 
                         self.printInstruction(instruction, "ADDLW 0x{x}\n", .{self.REGS.WREG.*});
                     },
-                    else => return error.InvalidInstruction,
                 }
             },
             0b0001 => {
@@ -725,6 +740,21 @@ pub const PIC18 = struct {
                             instruction & 0x00FF,
                         });
                         const val = try self.memReadBanked(use_bsr, @intCast(instruction & 0x00FF)) ^ self.REGS.WREG.*;
+                        if (dest_in_ram) {
+                            try self.memWriteBanked(use_bsr, @intCast(instruction & 0x00FF), val);
+                        } else {
+                            self.REGS.WREG.* = val;
+                        }
+                        self.REGS.STATUS.*.Z = if (val == 0) 1 else 0;
+                        self.REGS.STATUS.*.N = if (val & 0x80 != 0) 1 else 0;
+                    },
+                    0b1100 => { // COMF f  - Complement f
+                        self.printInstruction(instruction, "COMF use_bsr={} dest_in_ram={}  0x{x}\n", .{
+                            use_bsr,
+                            dest_in_ram,
+                            instruction & 0x00FF,
+                        });
+                        const val = ~(try self.memReadBanked(use_bsr, @intCast(instruction & 0x00FF)));
                         if (dest_in_ram) {
                             try self.memWriteBanked(use_bsr, @intCast(instruction & 0x00FF), val);
                         } else {
@@ -878,6 +908,22 @@ pub const PIC18 = struct {
                 const dest_in_ram = (nibble2 & 0b0010) == 0b10;
                 const use_bsr = (nibble2 & 0b0001) == 1;
                 switch (nibble2 & 0b1100) {
+                    0b0000 => { // RRNCF - Rotate right f (no carry)
+                        self.printInstruction(instruction, "RRNCF use_bsr={} dest_in_ram={}  0x{x}\n", .{
+                            use_bsr,
+                            dest_in_ram,
+                            instruction & 0x00FF,
+                        });
+                        const f = try self.memReadBanked(use_bsr, @intCast(instruction & 0x00FF));
+                        const val: u8 = (f >> 1) | (f << 7);
+                        self.REGS.STATUS.*.Z = if (val == 0) 1 else 0;
+                        self.REGS.STATUS.*.N = if (val & 0x80 != 0) 1 else 0;
+                        if (dest_in_ram) {
+                            try self.memWriteBanked(use_bsr, @intCast(instruction & 0x00FF), val);
+                        } else {
+                            self.REGS.WREG.* = val;
+                        }
+                    },
                     0b0100 => { // RLNCF - Rotate Left f (No Carry)
                         self.printInstruction(instruction, "RLNCF use_bsr={} dest_in_ram={}  0x{x}\n", .{
                             use_bsr,
@@ -934,6 +980,28 @@ pub const PIC18 = struct {
                         }
                         self.REGS.STATUS.*.Z = if (val == 0) 1 else 0;
                         self.REGS.STATUS.*.N = if (val & 0x80 != 0) 1 else 0;
+                    },
+                    0b0100 => { // SUBFWB - Subtract f from W with Borrow
+                        self.printInstruction(instruction, "SUBWFB use_bsr={} dest_in_ram={}  0x{x}\n", .{
+                            use_bsr,
+                            dest_in_ram,
+                            instruction & 0x00FF,
+                        });
+                        const f = try self.memReadBanked(use_bsr, @intCast(instruction & 0x00FF));
+                        const w = self.REGS.WREG.*;
+                        const borrow: u8 = 1 - self.REGS.STATUS.*.C; // C=1 means no borrow
+                        const full: i16 = @as(i16, w) - @as(i16, f) - @as(i16, borrow);
+                        const val: u8 = @truncate(@as(u16, @bitCast(full)));
+                        if (dest_in_ram) {
+                            try self.memWriteBanked(use_bsr, @intCast(instruction & 0x00FF), val);
+                        } else {
+                            self.REGS.WREG.* = val;
+                        }
+                        self.REGS.STATUS.*.Z = if (val == 0) 1 else 0;
+                        self.REGS.STATUS.*.N = if (val & 0x80 != 0) 1 else 0;
+                        self.REGS.STATUS.*.C = if (full >= 0) 1 else 0;
+                        self.REGS.STATUS.*.DC = if ((@as(i16, f & 0x0F) - @as(i16, w & 0x0F) - @as(i16, borrow)) >= 0) 1 else 0;
+                        self.REGS.STATUS.*.OV = if (((f ^ w) & (f ^ val) & 0x80) != 0) 1 else 0;
                     },
                     0b1000 => { // SUBWFB - Subtract W from f with Borrow
                         self.printInstruction(instruction, "SUBWFB use_bsr={} dest_in_ram={}  0x{x}\n", .{
@@ -1153,6 +1221,13 @@ pub const PIC18 = struct {
         }
     }
 
+    pub fn printStackTrace(self: *PIC18) void {
+        std.debug.print("CALL STACK:\n", .{});
+        for (0..(self.REGS.STKPTR.*)) |i| {
+            std.debug.print("  0x{x}\n", .{self.STACK[i]});
+        }
+        std.debug.print("  0x{x}  [PC]\n", .{self.PC});
+    }
     pub fn deinit(self: *PIC18) void {
         self.allocator.free(self.MEM);
         self.allocator.free(self.PROG);
