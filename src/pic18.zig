@@ -203,7 +203,7 @@ pub const PIC18 = struct {
             .FSR1H = &mem[0xFE2],
             .FSR2L = &mem[0xFD9],
             .FSR2H = &mem[0xFDA],
-            .STATUS = @ptrCast(&mem[0xFD8]),
+            .STATUS = @ptrCast(@alignCast(&mem[0xFD8])),
 
             .INDF0 = &mem[0xFEF],
             .POSTINC0 = &mem[0xFEE],
@@ -232,6 +232,7 @@ pub const PIC18 = struct {
             .RCON = @ptrCast(&mem[0x0FD0]),
             .INTCON = @ptrCast(&mem[0x0FF2]),
         };
+
         pic.MSSP1 = PICMSSP.init(1);
         pic.MSSP2 = PICMSSP.init(2);
         pic.Timer0 = PICTimer0.init();
@@ -430,6 +431,10 @@ pub const PIC18 = struct {
 
     fn memReadBanked(self: *PIC18, use_bsr: bool, addr: u8) !u8 {
         const full_addr = try self.resolveIndirect(try self.accessBankFullAddr(use_bsr, addr));
+        if (self.enableTrace) {
+            std.debug.print("full_addr = 0x{x}, val = 0b{b}\n", .{ full_addr, self.MEM[full_addr] });
+            std.debug.print("status_addr = {*}, full_addr = {*}\n", .{ self.REGS.STATUS, &self.MEM[full_addr] });
+        }
         return self.memRead(full_addr);
     }
 
@@ -532,7 +537,7 @@ pub const PIC18 = struct {
                                     self.printInstruction(instruction, "NOP\n", .{});
                                 } else if (nibble4 == 0b0100) {
                                     self.printInstruction(instruction, "CLRWDT\n", .{});
-                                    @as(*u8, @ptrCast(&self.REGS.STATUS)).* = 0x00;
+                                    @as(*u8, @ptrCast(self.REGS.STATUS)).* = 0x00;
                                     self.REGS.STATUS.*.TO = 1;
                                     self.REGS.STATUS.*.PD = 1;
                                     // TODO: implement watchdog timer
@@ -617,9 +622,8 @@ pub const PIC18 = struct {
                         self.REGS.STATUS.*.DC = if ((k & 0x0F) >= (w & 0x0F)) 1 else 0;
                         self.REGS.STATUS.*.OV = if (((k ^ w) & (k ^ val) & 0x80) != 0) 1 else 0;
 
+                        self.printInstruction(instruction, "SUBLW LIT=0x{x} RESULT = 0x{x}\n", .{ k, val });
                         self.REGS.WREG.* = val;
-
-                        self.printInstruction(instruction, "SUBLW 0x{x}\n", .{self.REGS.WREG.*});
                     },
                     0b1010 => { // XORLW - Exlusive OR Literal with W
                         self.REGS.WREG.* = self.REGS.WREG.* ^ @as(u8, @intCast(instruction & 0x00FF));
@@ -1113,8 +1117,9 @@ pub const PIC18 = struct {
             0b1010 => { // BTFSS - Bit Test File, Skip if Set
                 const bit_num: u3 = @intCast((nibble2 & 0b1110) >> 1);
                 const use_bsr = (nibble2 & 0b0001) == 1;
-                self.printInstruction(instruction, "BTFSS bit_num={} use_bsr={} 0x{x}\n", .{ bit_num, use_bsr, instruction & 0x00FF });
                 const val = try self.memReadBanked(use_bsr, @intCast(instruction & 0x00FF));
+
+                self.printInstruction(instruction, "BTFSS bit_num={} use_bsr={} 0x{x} VAL at f = 0b{b}, STATUS={}, STATUS_BIN=0b{b}\n", .{ bit_num, use_bsr, instruction & 0x00FF, val, self.REGS.STATUS.*, @as(u8, @bitCast(self.REGS.STATUS.*)) });
                 if ((val & (@as(u8, 1) << bit_num)) != 0) {
                     self.PC += 2; // skip next instruction
                     self.printInstruction(instruction, "BTFSS skipping next instruction because bit is set\n", .{});
