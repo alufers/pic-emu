@@ -27,8 +27,20 @@ pub fn main(init: std.process.Init) !void {
     defer pic.deinit();
     try pic.loadRom(&rdr.interface);
 
-    var spi_cs_pin = gpio.LoggingGPIOPin.init("A.5 [FLASH_CS]");
-    pic.GPIOPortA.pins[5] = &spi_cs_pin.interface;
+    // var spi_cs_pin = gpio.LoggingGPIOPin.init("A.5 [FLASH_CS]");
+
+    var flash_file = try std.Io.Dir.cwd().openFile(init.io, "./flash.bin", .{ .mode = .read_only });
+
+    defer flash_file.close(init.io);
+    const flash_stat = try flash_file.stat(init.io);
+    const flash_data = try init.gpa.alloc(u8, flash_stat.size);
+    defer init.gpa.free(flash_data);
+
+    _ = try std.Io.Dir.readFile(std.Io.Dir.cwd(), init.io, "flash.bin", flash_data);
+
+    var data_flash = spi_flash.SPIFlash.init(pic, flash_data);
+    pic.MSSP2.slave = &data_flash.spiSlaveInterface;
+    pic.GPIOPortA.pins[5] = &data_flash.csPinInterface;
 
     var disp = try IL9341_display.ILI9341Display.init(allocator, pic);
     defer disp.deinit();
@@ -41,14 +53,27 @@ pub fn main(init: std.process.Init) !void {
         pic.GPIOPortE.pins[idx] = &disp.dataPins[idx].interface;
     }
 
-    var data_flash = spi_flash.SPIFlash.init();
-    pic.MSSP2.slave = &data_flash.spiSlaveInterface;
-
-    for (0..300000_0000) |_| {
+    for (0..1000000_000) |_| {
         if (pic.PC == 0x002788) {
-            std.debug.print("DELAY", .{});
+            std.debug.print("DELAY\n", .{});
             pic.PC = 0x0027bc; // Skip over delays, ugly hack because the timer takes FOR EVA
         }
+
+        if (pic.PC == 0x1f120) {
+            std.debug.print("SKIP _modify_rolling_code_and_radio_proto\n", .{});
+            pic.PC = 0x1f198;
+        }
+
+        if (pic.PC == 0x001ddc) {
+            std.debug.print("SKIP EEPROM_WriteByte\n", .{});
+            pic.PC = 0x001e22;
+        }
+
+        if (pic.PC == 0x00395c) {
+            std.debug.print("SKIP Si4455_ReinitAndRx\n", .{});
+            pic.PC = 0x0084a;
+        }
+
         if (pic.PC == 0x015026) {
             std.debug.print("LOLOLOLO", .{});
             // return;
@@ -61,4 +86,6 @@ pub fn main(init: std.process.Init) !void {
             return err;
         };
     }
+
+    pic.printStackTrace();
 }

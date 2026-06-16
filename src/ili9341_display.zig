@@ -44,10 +44,13 @@ pub const ILI9341Display = struct {
         set_column_address,
         set_row_address,
         write_gram, // write into framebuffer
+        memory_access_control, // mac
     };
 
     const WIDTH = 240;
     const HEIGHT = 320;
+    /// Integer upscaling factor for the on-screen window.
+    const SCALE = 1;
 
     allocator: std.mem.Allocator,
     pic: *pic18.PIC18,
@@ -64,12 +67,15 @@ pub const ILI9341Display = struct {
 
     // Registers
     state: State,
-    dataIdx: u16, // which parameter are we on
+    dataIdx: u64, // which parameter are we on
 
     columnStart: u16, // SC[15:0] in datasheet
     columnEnd: u16, // EC[15:0] in datasheet
     rowStart: u16, // SP[15:0] in datasheet
     rowEnd: u16, // EP[15:0] in datasheet
+
+    xReg: u16,
+    yReg: u16,
 
     // Display side data
     framebuffer: [WIDTH][HEIGHT]u16,
@@ -92,6 +98,7 @@ pub const ILI9341Display = struct {
                 .write = Self.onWrPinWrite,
             },
         };
+        disp.allocator = allocator;
         disp.prevWrValue = true;
         disp.isData = false;
         disp.pic = pic;
@@ -101,6 +108,8 @@ pub const ILI9341Display = struct {
         disp.rowStart = 0;
         disp.rowEnd = 0;
         disp.dataIdx = 0;
+        disp.xReg = 0;
+        disp.yReg = 0;
 
         _ = try std.Thread.spawn(.{}, Self.drawThread, .{disp});
 
@@ -111,18 +120,45 @@ pub const ILI9341Display = struct {
         self.allocator.destroy(self);
     }
 
-    fn drawThread(_: *Self) void {
-        rl.initWindow(Self.WIDTH, Self.HEIGHT, "pic-emu");
+    fn drawThread(self: *Self) void {
+        rl.initWindow(Self.WIDTH * Self.SCALE, Self.HEIGHT * Self.SCALE, "pic-emu");
         defer rl.closeWindow();
 
         rl.setTargetFPS(60);
 
+        // Row-major RGB565 staging buffer matching a WIDTH x HEIGHT image. The
+        // framebuffer is stored column-major ([x][y]), so it has to be
+        // transposed before it can be uploaded to the GPU as an image.
+        var pixels: [HEIGHT][WIDTH]u16 = undefined;
+
+        const image = rl.Image{
+            .data = @ptrCast(&pixels),
+            .width = WIDTH,
+            .height = HEIGHT,
+            .mipmaps = 1,
+            .format = .uncompressed_r5g6b5,
+        };
+
+        const texture = rl.loadTextureFromImage(image) catch |err| {
+            std.debug.print("[DISP] failed to create texture: {}\n", .{err});
+            return;
+        };
+        defer rl.unloadTexture(texture);
+
         while (!rl.windowShouldClose()) { // Detect window close button or ESC key
+            // Transpose framebuffer[x][y] -> pixels[y][x].
+            for (0..WIDTH) |x| {
+                for (0..HEIGHT) |y| {
+                    pixels[y][x] = self.framebuffer[x][y];
+                }
+            }
+            rl.updateTexture(texture, &pixels);
 
             rl.beginDrawing();
             defer rl.endDrawing();
 
             rl.clearBackground(.black);
+            rl.drawTextureEx(texture, .{ .x = 0, .y = 0 }, 0, @as(f32, Self.SCALE), .white);
         }
     }
 
@@ -165,7 +201,7 @@ pub const ILI9341Display = struct {
                 }
                 // std.debug.print("[DISP] DATA[{}] {} START={} END={}\n", .{ self.dataIdx, dat, self.columnStart, self.columnEnd });
                 if (self.dataIdx >= 3) {
-                    // std.debug.print("[DISP] set set_column_address START={} END={}\n", .{ self.columnStart, self.columnEnd });
+                    std.debug.print("[DISP] set set_column_address START={} END={}\n", .{ self.columnStart, self.columnEnd });
                     self.state = .idle;
                 }
                 self.dataIdx += 1;
@@ -181,21 +217,45 @@ pub const ILI9341Display = struct {
                 }
 
                 if (self.dataIdx >= 3) {
+                    std.debug.print("[DISP] set set_row_address START={} END={}\n", .{ self.rowStart, self.rowEnd });
                     self.state = .idle;
                 }
                 self.dataIdx += 1;
             },
             .write_gram => {
-                std.debug.print("[DISP] ROW_START={} ROW_END={} COL_START={} COL_END={} \n", .{ self.columnStart, self.columnEnd, self.rowStart, self.rowEnd });
-                const x = (self.dataIdx / 2) % (self.columnEnd - self.columnStart);
-                const y = (self.dataIdx / 2) / (self.rowEnd - self.rowStart);
+                if (self.xReg >= Self.WIDTH or self.yReg >= Self.HEIGHT) {
+                    std.debug.print("[DISP] !!OOB!!  ROW_START={} ROW_END={} COL_START={} COL_END={}, X={}, Y={} \n", .{
+                        self.columnStart,
+                        self.columnEnd,
+                        self.rowStart,
+                        self.rowEnd,
+                        self.xReg,
+                        self.yReg,
+                    });
 
-                std.debug.print("[DISP] memwrite, X={}, Y={}\n", .{ x, y });
+                    self.pic.printStackTrace();
+                    return;
+                }
 
-                self.dataIdx +%= 1;
+                const pixel: *[2]u8 = @ptrCast(@alignCast(&self.framebuffer[self.xReg][self.yReg]));
+                pixel[(self.dataIdx + 1) % 2] = dat;
 
-                const pixel: *[2]u8 = @ptrCast(@alignCast(&self.framebuffer[x][y]));
-                pixel[self.dataIdx % 2] = dat;
+                self.dataIdx += 1;
+                if (self.dataIdx == 2) {
+                    self.dataIdx = 0;
+                    self.xReg += 1;
+                    if (self.xReg == self.columnEnd) {
+                        self.xReg = self.columnStart;
+                        self.yReg += 1;
+                        if (self.yReg >= self.rowEnd) {
+                            self.yReg = self.rowStart;
+                        }
+                    }
+                }
+            },
+            .memory_access_control => {
+                std.debug.print("[DISP] mac = 0x{x}\n", .{dat});
+                self.state = .idle;
             },
             else => {}, // NOP
         }
@@ -214,9 +274,15 @@ pub const ILI9341Display = struct {
             .gram => {
                 self.state = .write_gram;
                 self.dataIdx = 0;
+                self.xReg = self.columnStart;
+                self.yReg = self.rowStart;
+            },
+            .mac => {
+                self.state = .memory_access_control;
+                self.dataIdx = 0;
             },
             else => {
-                std.debug.print("[DISP] Got unhandled command {}\n", .{cmd});
+                std.debug.print("[DISP] Got unhandled command {} (0x{x})\n", .{ cmd, @intFromEnum(cmd) });
             },
         }
     }
