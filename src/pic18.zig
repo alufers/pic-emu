@@ -1067,6 +1067,14 @@ pub const PIC18 = struct {
                             self.printInstruction(instruction, "CPFSGT skipping next instruction because f>W\n", .{});
                         }
                     },
+                    0b0110 => { // TSTFSZ - Tst F, Skip if 0
+                        const val = try self.memReadBanked(use_bsr, @intCast(instruction & 0x00FF));
+                        self.printInstruction(instruction, "TSTFSZ 0x{x}\n", .{instruction & 0x00FF});
+                        if (val == 0) {
+                            self.PC += 2; // skip next instruction
+                            self.printInstruction(instruction, "TSTFSZ skipping next instruction because f==0\n", .{});
+                        }
+                    },
                     0b1000 => { // SETF - Set f (to all ones)
                         self.printInstruction(instruction, "SETF 0x{x}\n", .{instruction & 0x00FF});
                         try self.memWriteBanked(use_bsr, @intCast(instruction & 0x00FF), 0xFF);
@@ -1075,6 +1083,14 @@ pub const PIC18 = struct {
                         self.printInstruction(instruction, "CLRF 0x{x}\n", .{instruction & 0x00FF});
                         try self.memWriteBanked(use_bsr, @intCast(instruction & 0x00FF), 0);
                         self.REGS.STATUS.*.Z = 1;
+                    },
+                    0b1100 => { // NEGF - negate f
+                        const val = (~(try self.memReadBanked(use_bsr, @intCast(instruction & 0x00FF)))) +% 1;
+                        try self.memWriteBanked(use_bsr, @intCast(instruction & 0x00FF), val);
+
+                        self.REGS.STATUS.*.Z = if (val == 0) 1 else 0;
+                        self.REGS.STATUS.*.N = if (val & 0x80 != 0) 1 else 0;
+                        //TODO: more status?
                     },
                     0b1110 => { // MOVWF Move W to f
                         self.printInstruction(instruction, "MOVWF 0x{x}\n", .{instruction & 0x00FF});
@@ -1224,6 +1240,10 @@ pub const PIC18 = struct {
     pub fn printStackTrace(self: *PIC18) void {
         std.debug.print("CALL STACK:\n", .{});
         for (0..(self.REGS.STKPTR.*)) |i| {
+            if (i >= self.STACK.len) {
+                std.debug.print("  == OVERFLOW\n", .{});
+                continue;
+            }
             std.debug.print("  0x{x}\n", .{self.STACK[i]});
         }
         std.debug.print("  0x{x}  [PC]\n", .{self.PC});
