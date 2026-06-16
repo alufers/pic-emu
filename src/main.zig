@@ -74,10 +74,48 @@ pub fn main(init: std.process.Init) !void {
             pic.PC = 0x0084a;
         }
 
-        if (pic.PC == 0x015026) {
-            std.debug.print("LOLOLOLO", .{});
-            // return;
+        if (pic.PC >= 0x01d90a and pic.PC <= 0x01d9c6) { // Slow down draw sprite
+            // var threaded: std.Io.Threaded = .init_single_threaded;
+            // const io = threaded.io();
+
+            // std.debug.print("FLASH_TABLE = 0x{x}\n", .{std.mem.readInt(u32, pic.MEM[0x03d1..(0x03d1 + 4)], .little)});
+
+            // std.Io.sleep(init.io, std.Io.Duration.fromMilliseconds(2), .real) catch unreachable;
+            // pic.printStackTrace();
+
+            // const tblptr: u21 = (@as(u21, pic.REGS.TBLPTRU.* & 0x0F) << 16) | (@as(u21, pic.REGS.TBLPTRH.*) << 8) | @as(u21, pic.REGS.TBLPTRL.*);
+            // std.debug.print("TBLPTR = 0x{x}\n", .{tblptr});
         }
+
+        if (pic.PC == 0x01fc2c) {
+            std.debug.print("WREG AT Flash_ReadString = 0x{x}\n", .{pic.REGS.WREG.*});
+
+            if (pic.REGS.WREG.* == 0x32) { // Catch "Zapisz"
+                // pic.printStackTrace();
+            }
+        }
+
+        // On return of Flash_ReadString
+        if (pic.PC == 0x01fcac) {
+            // Print read out string
+            const stringVarPtr = pic.MEM[0x0768 .. 0x0768 + 30];
+            std.debug.print("STR_BUF = {x}\n", .{stringVarPtr});
+        }
+
+        // Trace LCD_draw_text
+        if (pic.PC == 0x013ac4) {
+            // pic.MEM[0x0768] = 'A';
+
+            std.Io.sleep(init.io, std.Io.Duration.fromMilliseconds(500), .real) catch unreachable;
+            pic.MEM[0x35] = 0;
+            pic.MEM[0x36] = 0;
+            std.debug.print("LCD_draw_text X = 0x{x}\n", .{std.mem.readInt(u16, pic.MEM[0x33..(0x33 + 2)], .little)});
+            std.debug.print("LCD_draw_text Y = 0x{x}\n", .{std.mem.readInt(u16, pic.MEM[0x35..(0x35 + 2)], .little)});
+            std.debug.print("LCD_draw_text TEXT_ADDR = 0x{x}\n", .{std.mem.readInt(u16, pic.MEM[0x3c..(0x3c + 2)], .little)});
+
+            pic.printStackTrace();
+        }
+
         pic.execInstruction() catch |err| {
             // Dump memory to file
             var out_file = try std.Io.Dir.cwd().createFile(init.io, "dump.bin", .{ .truncate = true });

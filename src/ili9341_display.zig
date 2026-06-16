@@ -150,6 +150,7 @@ pub const ILI9341Display = struct {
             for (0..WIDTH) |x| {
                 for (0..HEIGHT) |y| {
                     pixels[y][x] = self.framebuffer[x][y];
+                    // pixels[y][x] = (@as(u16, self.pic.PROG[(0xfd4b + x + y * 16) * 2]) << 8) | (self.pic.PROG[(0xfd4b + x + y * 16) * 2 + 1]);
                 }
             }
             rl.updateTexture(texture, &pixels);
@@ -201,7 +202,7 @@ pub const ILI9341Display = struct {
                 }
                 // std.debug.print("[DISP] DATA[{}] {} START={} END={}\n", .{ self.dataIdx, dat, self.columnStart, self.columnEnd });
                 if (self.dataIdx >= 3) {
-                    std.debug.print("[DISP] set set_column_address START={} END={}\n", .{ self.columnStart, self.columnEnd });
+                    // std.debug.print("[DISP] set set_column_address START={} END={}\n", .{ self.columnStart, self.columnEnd });
                     self.state = .idle;
                 }
                 self.dataIdx += 1;
@@ -217,23 +218,24 @@ pub const ILI9341Display = struct {
                 }
 
                 if (self.dataIdx >= 3) {
-                    std.debug.print("[DISP] set set_row_address START={} END={}\n", .{ self.rowStart, self.rowEnd });
+                    // std.debug.print("[DISP] set set_row_address START={} END={}\n", .{ self.rowStart, self.rowEnd });
+
                     self.state = .idle;
                 }
                 self.dataIdx += 1;
             },
             .write_gram => {
                 if (self.xReg >= Self.WIDTH or self.yReg >= Self.HEIGHT) {
-                    std.debug.print("[DISP] !!OOB!!  ROW_START={} ROW_END={} COL_START={} COL_END={}, X={}, Y={} \n", .{
-                        self.columnStart,
-                        self.columnEnd,
-                        self.rowStart,
-                        self.rowEnd,
-                        self.xReg,
-                        self.yReg,
-                    });
+                    // std.debug.print("[DISP] !!OOB!!  ROW_START={} ROW_END={} COL_START={} COL_END={}, X={}, Y={} \n", .{
+                    //     self.columnStart,
+                    //     self.columnEnd,
+                    //     self.rowStart,
+                    //     self.rowEnd,
+                    //     self.xReg,
+                    //     self.yReg,
+                    // });
 
-                    self.pic.printStackTrace();
+                    // self.pic.printStackTrace();
                     return;
                 }
 
@@ -244,7 +246,7 @@ pub const ILI9341Display = struct {
                 if (self.dataIdx == 2) {
                     self.dataIdx = 0;
                     self.xReg += 1;
-                    if (self.xReg == self.columnEnd) {
+                    if (self.xReg > self.columnEnd) {
                         self.xReg = self.columnStart;
                         self.yReg += 1;
                         if (self.yReg >= self.rowEnd) {
@@ -276,6 +278,12 @@ pub const ILI9341Display = struct {
                 self.dataIdx = 0;
                 self.xReg = self.columnStart;
                 self.yReg = self.rowStart;
+
+                // for (self.columnStart..self.columnEnd) |x| {
+                //     for (self.rowStart..self.rowEnd) |y| {
+                //         self.framebuffer[x][y] = 0xF04b;
+                //     }
+                // }
             },
             .mac => {
                 self.state = .memory_access_control;

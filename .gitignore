@@ -10,3 +10,4 @@ pilot.X.production.hex
 dump.bin
 zig-pkg/
 kcov-out
+flash.bin

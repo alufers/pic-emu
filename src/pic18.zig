@@ -607,14 +607,15 @@ pub const PIC18 = struct {
                     0b1000 => { // SUBLW - Subtract W from Literal
                         // Status affected = N, OV, C, DC, Z
                         const k: u8 = @intCast(instruction & 0x00FF);
+                        const w = self.REGS.WREG.*;
 
-                        const val, const overflow = @subWithOverflow(self.REGS.WREG.*, k);
+                        const val = k -% w; // SUBLW: k - W -> W
 
                         self.REGS.STATUS.*.Z = if (val == 0) 1 else 0;
                         self.REGS.STATUS.*.N = if (val & 0x80 != 0) 1 else 0;
-                        self.REGS.STATUS.*.C = overflow;
-                        self.REGS.STATUS.*.DC = if (((self.REGS.WREG.* & 0xF) + (k & 0xF)) > 0xF) 1 else 0;
-                        self.REGS.STATUS.*.OV = if (((~(k ^ self.REGS.WREG.*)) & (k ^ val) & 0x80) != 0) 1 else 0;
+                        self.REGS.STATUS.*.C = if (k >= w) 1 else 0; // C=1 means no borrow
+                        self.REGS.STATUS.*.DC = if ((k & 0x0F) >= (w & 0x0F)) 1 else 0;
+                        self.REGS.STATUS.*.OV = if (((k ^ w) & (k ^ val) & 0x80) != 0) 1 else 0;
 
                         self.REGS.WREG.* = val;
 
@@ -982,7 +983,7 @@ pub const PIC18 = struct {
                         self.REGS.STATUS.*.N = if (val & 0x80 != 0) 1 else 0;
                     },
                     0b0100 => { // SUBFWB - Subtract f from W with Borrow
-                        self.printInstruction(instruction, "SUBWFB use_bsr={} dest_in_ram={}  0x{x}\n", .{
+                        self.printInstruction(instruction, "SUBFWB use_bsr={} dest_in_ram={}  0x{x}\n", .{
                             use_bsr,
                             dest_in_ram,
                             instruction & 0x00FF,
@@ -990,7 +991,7 @@ pub const PIC18 = struct {
                         const f = try self.memReadBanked(use_bsr, @intCast(instruction & 0x00FF));
                         const w = self.REGS.WREG.*;
                         const borrow: u8 = 1 - self.REGS.STATUS.*.C; // C=1 means no borrow
-                        const full: i16 = @as(i16, w) - @as(i16, f) - @as(i16, borrow);
+                        const full: i16 = @as(i16, w) - @as(i16, f) - @as(i16, borrow); // W - f - borrow
                         const val: u8 = @truncate(@as(u16, @bitCast(full)));
                         if (dest_in_ram) {
                             try self.memWriteBanked(use_bsr, @intCast(instruction & 0x00FF), val);
@@ -1000,8 +1001,8 @@ pub const PIC18 = struct {
                         self.REGS.STATUS.*.Z = if (val == 0) 1 else 0;
                         self.REGS.STATUS.*.N = if (val & 0x80 != 0) 1 else 0;
                         self.REGS.STATUS.*.C = if (full >= 0) 1 else 0;
-                        self.REGS.STATUS.*.DC = if ((@as(i16, f & 0x0F) - @as(i16, w & 0x0F) - @as(i16, borrow)) >= 0) 1 else 0;
-                        self.REGS.STATUS.*.OV = if (((f ^ w) & (f ^ val) & 0x80) != 0) 1 else 0;
+                        self.REGS.STATUS.*.DC = if ((@as(i16, w & 0x0F) - @as(i16, f & 0x0F) - @as(i16, borrow)) >= 0) 1 else 0;
+                        self.REGS.STATUS.*.OV = if (((w ^ f) & (w ^ val) & 0x80) != 0) 1 else 0;
                     },
                     0b1000 => { // SUBWFB - Subtract W from f with Borrow
                         self.printInstruction(instruction, "SUBWFB use_bsr={} dest_in_ram={}  0x{x}\n", .{
@@ -1085,12 +1086,15 @@ pub const PIC18 = struct {
                         self.REGS.STATUS.*.Z = 1;
                     },
                     0b1100 => { // NEGF - negate f
-                        const val = (~(try self.memReadBanked(use_bsr, @intCast(instruction & 0x00FF)))) +% 1;
+                        const f = try self.memReadBanked(use_bsr, @intCast(instruction & 0x00FF));
+                        const val = (~f) +% 1;
                         try self.memWriteBanked(use_bsr, @intCast(instruction & 0x00FF), val);
 
                         self.REGS.STATUS.*.Z = if (val == 0) 1 else 0;
                         self.REGS.STATUS.*.N = if (val & 0x80 != 0) 1 else 0;
-                        //TODO: more status?
+                        self.REGS.STATUS.*.C = if (f == 0) 1 else 0; // 0 - f: no borrow only when f == 0
+                        self.REGS.STATUS.*.DC = if ((f & 0x0F) == 0) 1 else 0; // no digit borrow only when low nibble == 0
+                        self.REGS.STATUS.*.OV = if (f == 0x80) 1 else 0; // negating -128 overflows
                     },
                     0b1110 => { // MOVWF Move W to f
                         self.printInstruction(instruction, "MOVWF 0x{x}\n", .{instruction & 0x00FF});
