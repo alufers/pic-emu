@@ -431,10 +431,6 @@ pub const PIC18 = struct {
 
     fn memReadBanked(self: *PIC18, use_bsr: bool, addr: u8) !u8 {
         const full_addr = try self.resolveIndirect(try self.accessBankFullAddr(use_bsr, addr));
-        if (self.enableTrace) {
-            std.debug.print("full_addr = 0x{x}, val = 0b{b}\n", .{ full_addr, self.MEM[full_addr] });
-            std.debug.print("status_addr = {*}, full_addr = {*}\n", .{ self.REGS.STATUS, &self.MEM[full_addr] });
-        }
         return self.memRead(full_addr);
     }
 

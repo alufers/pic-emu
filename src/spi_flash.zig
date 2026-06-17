@@ -108,7 +108,6 @@ pub const SPIFlash = struct {
                     },
                     .read_status_register_1 => {
                         self.state = .read_status_register_1;
-                        std.debug.print("[FLASH] Read Status Register-1\n", .{});
                     },
                     .write_enable => {
                         std.debug.print("[FLASH] Write Enable\n", .{});
@@ -149,7 +148,7 @@ pub const SPIFlash = struct {
             },
             .read_status_register_1 => {
                 self.state = .idle;
-                self.pic.printStackTrace();
+
                 return @as(u8, @bitCast(self.statusRegister1));
             },
             .fast_read_receive_addr => {

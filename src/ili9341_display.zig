@@ -121,6 +121,7 @@ pub const ILI9341Display = struct {
     }
 
     fn drawThread(self: *Self) void {
+        rl.setTraceLogLevel(rl.TraceLogLevel.none);
         rl.initWindow(Self.WIDTH * Self.SCALE, Self.HEIGHT * Self.SCALE, "pic-emu");
         defer rl.closeWindow();
 

@@ -53,35 +53,77 @@ pub fn main(init: std.process.Init) !void {
         pic.GPIOPortE.pins[idx] = &disp.dataPins[idx].interface;
     }
 
-    for (0..100000_000) |_| {
+    // pic.PC = 0xd02;
+    // pic.REGS.WREG.* = 0x0F;
+
+    // for (0..5000) |_| {
+    //     pic.execInstruction() catch {
+    //         std.debug.print("ICON {x:02}{x:02}{x:02}{x:02}\n", .{ pic.MEM[0xf], pic.MEM[0xe], pic.MEM[0xd], pic.MEM[0xc] });
+    //         return;
+    //     };
+    // }
+
+    for (0x2000..(0x2000 + 32)) |i| {
+        data_flash.flashBuf[i] = 0xFF;
+    }
+
+    for (0..200000_000) |idx| {
         if (pic.PC == 0x002788) {
             std.debug.print("DELAY\n", .{});
             pic.PC = 0x0027bc; // Skip over delays, ugly hack because the timer takes FOR EVA
         }
 
         if (pic.PC == 0x1f120) {
+            // hangs on EEprom stuff
             std.debug.print("SKIP _modify_rolling_code_and_radio_proto\n", .{});
             pic.PC = 0x1f198;
         }
 
         if (pic.PC == 0x001ddc) {
+            // hangs waiting for some GPIO stuff??
             std.debug.print("SKIP EEPROM_WriteByte\n", .{});
             pic.PC = 0x001e22;
         }
 
         if (pic.PC == 0x00395c) {
+            // hangs waiting for radio status
             std.debug.print("SKIP Si4455_ReinitAndRx\n", .{});
             pic.PC = 0x0084a;
         }
 
         if (pic.PC == 0x0038cc) {
+            // hangs on adc read
             std.debug.print("SKIP ADC_READ\n", .{});
             pic.PC = 0x0038e2;
         }
 
-        if (pic.PC == 0x013fcc) {
-            std.debug.print("SKIP Si4455_ProcessReceived\n", .{});
-            pic.PC = 0x0143cc;
+        if (pic.PC == 0x00102c) {
+            std.debug.print("SKIP Radio_ReceiveData\n", .{});
+            pic.PC = 0x001084;
+        }
+        if (pic.PC == 0x01a296) {
+            // Skip SerialCommand_Handler
+            // std.debug.print("skip SerialCommand_Handler", .{});
+            pic.PC = 0x01a2d8;
+        }
+
+        if (pic.PC == 0x000d02) {
+            std.debug.print("ICON ID = {}\n", .{pic.REGS.WREG.*});
+        }
+
+        if (pic.PC == 0x013ac4) {
+            const text_addr = std.mem.readInt(u16, pic.MEM[0x3c .. 0x3c + 2], .little);
+            std.debug.print("LCD_draw_text: {s}\n", .{pic.MEM[text_addr .. text_addr + 109]});
+            // pic.printStackTrace();
+        }
+
+        if (pic.PC == 0x01d90a) {
+            std.debug.print("LCD_DrawSprite\n", .{});
+            pic.printStackTrace();
+        }
+
+        if (idx == 1100000_000) {
+            pic.PC = 0x01c5d2;
         }
 
         pic.execInstruction() catch |err| {

@@ -11,3 +11,5 @@ dump.bin
 zig-pkg/
 kcov-out
 flash.bin
+trash/
+__pycache__
