@@ -67,23 +67,17 @@ pub fn main(init: std.process.Init) !void {
         data_flash.flashBuf[i] = 0xFF;
     }
 
-    for (0..200000_000) |idx| {
+    for (0..100000_000) |idx| {
         if (pic.PC == 0x002788) {
             std.debug.print("DELAY\n", .{});
             pic.PC = 0x0027bc; // Skip over delays, ugly hack because the timer takes FOR EVA
         }
 
-        if (pic.PC == 0x1f120) {
-            // hangs on EEprom stuff
-            std.debug.print("SKIP _modify_rolling_code_and_radio_proto\n", .{});
-            pic.PC = 0x1f198;
-        }
-
-        if (pic.PC == 0x001ddc) {
-            // hangs waiting for some GPIO stuff??
-            std.debug.print("SKIP EEPROM_WriteByte\n", .{});
-            pic.PC = 0x001e22;
-        }
+        // if (pic.PC == 0x1f120) {
+        //     // hangs on EEprom stuff
+        //     std.debug.print("SKIP _modify_rolling_code_and_radio_proto\n", .{});
+        //     pic.PC = 0x1f198;
+        // }
 
         if (pic.PC == 0x00395c) {
             // hangs waiting for radio status
@@ -124,6 +118,10 @@ pub fn main(init: std.process.Init) !void {
 
         if (idx == 1100000_000) {
             pic.PC = 0x01c5d2;
+        }
+
+        if (pic.PC == 0x1e12) {
+            pic.enableTrace = true;
         }
 
         pic.execInstruction() catch |err| {

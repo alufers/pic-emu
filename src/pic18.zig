@@ -4,7 +4,7 @@ const gpio = @import("gpio.zig");
 const PICGPIOPort = @import("pic_gpio_port.zig").PICGPIOPort;
 const PICMSSP = @import("pic_mssp.zig").PICMSSP;
 const PICTimer0 = @import("pic_timer0.zig").PICTimer0;
-
+const PICEeprom = @import("pic_eeprom.zig").PICEeprom;
 const readInt = std.mem.readInt;
 
 pub const PeripheralError = error{
@@ -135,6 +135,10 @@ pub const PIC18 = struct {
 
         RCON: *RconReg,
         INTCON: *IntconReg,
+
+        EEADR: *u8,
+        EEADRH: *u8,
+        EEDATA: *u8,
     };
 
     allocator: std.mem.Allocator,
@@ -169,6 +173,7 @@ pub const PIC18 = struct {
     MSSP1: PICMSSP,
     MSSP2: PICMSSP,
     Timer0: PICTimer0,
+    Eeprom: PICEeprom,
 
     pub fn init(allocator: std.mem.Allocator) *PIC18 {
         // Allocate full 2Mbyte program memory space
@@ -231,6 +236,10 @@ pub const PIC18 = struct {
 
             .RCON = @ptrCast(&mem[0x0FD0]),
             .INTCON = @ptrCast(&mem[0x0FF2]),
+
+            .EEADR = @ptrCast(&mem[0x0F62]),
+            .EEADRH = @ptrCast(&mem[0x0F63]),
+            .EEDATA = @ptrCast(&mem[0x0F61]),
         };
 
         pic.MSSP1 = PICMSSP.init(1);
@@ -243,6 +252,7 @@ pub const PIC18 = struct {
         pic.GPIOPortE = PICGPIOPort.init();
         pic.GPIOPortF = PICGPIOPort.init();
         pic.GPIOPortG = PICGPIOPort.init();
+        pic.Eeprom = PICEeprom.init();
 
         pic.SFRHandlers[0xF80 - 0xF00] = &pic.GPIOPortA.PORT_REG_HANDLER;
         pic.SFRHandlers[0xF92 - 0xF00] = &pic.GPIOPortA.TRIS_REG_HANDLER;
@@ -287,6 +297,11 @@ pub const PIC18 = struct {
         pic.SFRHandlers[0xF68 - 0xF00] = &pic.MSSP2.STAT_REG_HANDLER;
         pic.SFRHandlers[0xF67 - 0xF00] = &pic.MSSP2.CON1_REG_HANDLER;
         pic.SFRHandlers[0xF66 - 0xF00] = &pic.MSSP2.CON2_REG_HANDLER;
+
+        // The datasheet for p18f67k22 says it's at 0xF7F
+        // ...but it turns out it is not a p18f67k22 we are emulating
+        // so EECON1 is at 0x0FA6
+        pic.SFRHandlers[0x0FA6 - 0xF00] = &pic.Eeprom.EECON1_REG_HANDLER;
 
         // Reset SFR handlers
         for (pic.SFRHandlers, 0..) |handler, offset| {
