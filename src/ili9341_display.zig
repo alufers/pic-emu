@@ -1,7 +1,8 @@
 const std = @import("std");
 const gpio = @import("gpio.zig");
 const pic18 = @import("pic18.zig");
-const rl = @import("raylib");
+const ui = @import("ui.zig");
+const raylib_ui = @import("raylib_ui.zig");
 const LcdCommand = @import("ili9341_cmds.zig").LcdCommand;
 
 pub const DisplayDataPin = struct {
@@ -47,13 +48,12 @@ pub const ILI9341Display = struct {
         memory_access_control, // mac
     };
 
-    const WIDTH = 240;
-    const HEIGHT = 320;
-    /// Integer upscaling factor for the on-screen window.
-    const SCALE = 1;
+    const WIDTH = raylib_ui.RaylibUI.WIDTH;
+    const HEIGHT = raylib_ui.RaylibUI.HEIGHT;
 
     allocator: std.mem.Allocator,
     pic: *pic18.PIC18,
+    ui: *ui.UI,
 
     // MCU side interface
 
@@ -77,10 +77,10 @@ pub const ILI9341Display = struct {
     xReg: u16,
     yReg: u16,
 
-    // Display side data
-    framebuffer: [WIDTH][HEIGHT]u16,
+    /// Accumulates the two bytes of the current RGB565 pixel being written.
+    pixelBuf: u16,
 
-    pub fn init(allocator: std.mem.Allocator, pic: *pic18.PIC18) !*Self {
+    pub fn init(allocator: std.mem.Allocator, pic: *pic18.PIC18, ui_iface: *ui.UI) !*Self {
         var disp = allocator.create(Self) catch unreachable;
 
         disp.dataPins = .{ DisplayDataPin.init(), DisplayDataPin.init(), DisplayDataPin.init(), DisplayDataPin.init(), DisplayDataPin.init(), DisplayDataPin.init(), DisplayDataPin.init(), DisplayDataPin.init() };
@@ -99,6 +99,7 @@ pub const ILI9341Display = struct {
             },
         };
         disp.allocator = allocator;
+        disp.ui = ui_iface;
         disp.prevWrValue = true;
         disp.isData = false;
         disp.pic = pic;
@@ -110,58 +111,13 @@ pub const ILI9341Display = struct {
         disp.dataIdx = 0;
         disp.xReg = 0;
         disp.yReg = 0;
-
-        _ = try std.Thread.spawn(.{}, Self.drawThread, .{disp});
+        disp.pixelBuf = 0;
 
         return disp;
     }
 
     pub fn deinit(self: *Self) void {
         self.allocator.destroy(self);
-    }
-
-    fn drawThread(self: *Self) void {
-        rl.setTraceLogLevel(rl.TraceLogLevel.none);
-        rl.initWindow(Self.WIDTH * Self.SCALE, Self.HEIGHT * Self.SCALE, "pic-emu");
-        defer rl.closeWindow();
-
-        rl.setTargetFPS(60);
-
-        // Row-major RGB565 staging buffer matching a WIDTH x HEIGHT image. The
-        // framebuffer is stored column-major ([x][y]), so it has to be
-        // transposed before it can be uploaded to the GPU as an image.
-        var pixels: [HEIGHT][WIDTH]u16 = undefined;
-
-        const image = rl.Image{
-            .data = @ptrCast(&pixels),
-            .width = WIDTH,
-            .height = HEIGHT,
-            .mipmaps = 1,
-            .format = .uncompressed_r5g6b5,
-        };
-
-        const texture = rl.loadTextureFromImage(image) catch |err| {
-            std.debug.print("[DISP] failed to create texture: {}\n", .{err});
-            return;
-        };
-        defer rl.unloadTexture(texture);
-
-        while (!rl.windowShouldClose()) { // Detect window close button or ESC key
-            // Transpose framebuffer[x][y] -> pixels[y][x].
-            for (0..WIDTH) |x| {
-                for (0..HEIGHT) |y| {
-                    pixels[y][x] = self.framebuffer[x][y];
-                    // pixels[y][x] = (@as(u16, self.pic.PROG[(0xfd4b + x + y * 16) * 2]) << 8) | (self.pic.PROG[(0xfd4b + x + y * 16) * 2 + 1]);
-                }
-            }
-            rl.updateTexture(texture, &pixels);
-
-            rl.beginDrawing();
-            defer rl.endDrawing();
-
-            rl.clearBackground(.black);
-            rl.drawTextureEx(texture, .{ .x = 0, .y = 0 }, 0, @as(f32, Self.SCALE), .white);
-        }
     }
 
     /// Combine data pin states into a byte
@@ -240,11 +196,12 @@ pub const ILI9341Display = struct {
                     return;
                 }
 
-                const pixel: *[2]u8 = @ptrCast(@alignCast(&self.framebuffer[self.xReg][self.yReg]));
+                const pixel: *[2]u8 = @ptrCast(@alignCast(&self.pixelBuf));
                 pixel[(self.dataIdx + 1) % 2] = dat;
 
                 self.dataIdx += 1;
                 if (self.dataIdx == 2) {
+                    self.ui.setPixel(self.xReg, self.yReg, self.pixelBuf);
                     self.dataIdx = 0;
                     self.xReg += 1;
                     if (self.xReg > self.columnEnd) {

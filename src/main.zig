@@ -4,6 +4,7 @@ const gpio = @import("gpio.zig");
 const PIC18 = @import("pic18.zig").PIC18;
 const spi_flash = @import("spi_flash.zig");
 const IL9341_display = @import("ili9341_display.zig");
+const RaylibUI = @import("raylib_ui.zig").RaylibUI;
 
 test {
     _ = @import("instr_test.zig");
@@ -42,7 +43,10 @@ pub fn main(init: std.process.Init) !void {
     pic.MSSP2.slave = &data_flash.spiSlaveInterface;
     pic.GPIOPortA.pins[5] = &data_flash.csPinInterface;
 
-    var disp = try IL9341_display.ILI9341Display.init(allocator, pic);
+    var ui_impl = try RaylibUI.init(allocator);
+    defer ui_impl.deinit();
+
+    var disp = try IL9341_display.ILI9341Display.init(allocator, pic, &ui_impl.interface);
     defer disp.deinit();
     // var disp_wr = gpio.LoggingGPIOPin.init("G.1 [DISP_WR]");
 
@@ -68,16 +72,20 @@ pub fn main(init: std.process.Init) !void {
     }
 
     for (0..100000_000) |idx| {
+        if (ui_impl.interface.exitRequested()) {
+            break;
+        }
+
         if (pic.PC == 0x002788) {
             std.debug.print("DELAY\n", .{});
             pic.PC = 0x0027bc; // Skip over delays, ugly hack because the timer takes FOR EVA
         }
 
-        // if (pic.PC == 0x1f120) {
-        //     // hangs on EEprom stuff
-        //     std.debug.print("SKIP _modify_rolling_code_and_radio_proto\n", .{});
-        //     pic.PC = 0x1f198;
-        // }
+        if (pic.PC == 0x1f120) {
+            // hangs on EEprom stuff
+            std.debug.print("SKIP _modify_rolling_code_and_radio_proto\n", .{});
+            pic.PC = 0x1f198;
+        }
 
         if (pic.PC == 0x00395c) {
             // hangs waiting for radio status
