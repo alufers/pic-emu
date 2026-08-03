@@ -1176,11 +1176,17 @@ pub const PIC18 = struct {
                 try self.memWrite(indirect_fd, try self.memRead(indirect_fs));
             },
             0b1101 => {
+                const n: i11 = @bitCast(@as(u11, @intCast(instruction & 0b0000_0111_1111_1111)));
                 switch (nibble2 & 0b1000) {
                     0b0000 => { // BRA - Unconditional branch
-                        const n: i11 = @bitCast(@as(u11, @intCast(instruction & 0b0000_0111_1111_1111)));
                         self.PC = @intCast(@as(i32, self.PC) + 2 * @as(i32, n));
                         self.printInstruction(instruction, "BRA n={} -> PC=0x{x}\n", .{ n, self.PC });
+                    },
+                    0b1000 => { // RCALL - Relative Call
+                        try self.check(self.REGS.STKPTR.* < self.STACK.len, "stack overflow not implemented", .{}); // TODO: implement stack overflow handling
+                        self.STACK[self.REGS.STKPTR.*] = self.PC;
+                        self.REGS.STKPTR.* += 1;
+                        self.PC = @intCast(@as(i32, self.PC) + 2 * @as(i32, n));
                     },
                     else => return error.InvalidInstruction,
                 }
