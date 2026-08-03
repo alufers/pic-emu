@@ -5,7 +5,7 @@ const PIC18 = @import("pic18.zig").PIC18;
 const spi_flash = @import("spi_flash.zig");
 const IL9341_display = @import("ili9341_display.zig");
 const RaylibUI = @import("raylib_ui.zig").RaylibUI;
-
+const gpio_button = @import("gpio_button.zig");
 test {
     _ = @import("instr_test.zig");
     _ = @import("e2e_test.zig");
@@ -60,6 +60,11 @@ pub fn main(init: std.process.Init) !void {
     // pic.PC = 0xd02;
     // pic.REGS.WREG.* = 0x0F;
 
+    // Buttons
+    var down_button = gpio_button.GPIOButton.init(pic, &ui_impl.interface, .down);
+
+    pic.GPIOPortF.pins[1] = &down_button.pinInterface;
+
     // for (0..5000) |_| {
     //     pic.execInstruction() catch {
     //         std.debug.print("ICON {x:02}{x:02}{x:02}{x:02}\n", .{ pic.MEM[0xf], pic.MEM[0xe], pic.MEM[0xd], pic.MEM[0xc] });
@@ -71,21 +76,23 @@ pub fn main(init: std.process.Init) !void {
         data_flash.flashBuf[i] = 0xFF;
     }
 
-    for (0..100000_000) |idx| {
+    for (0..900000_000) |idx| {
         if (ui_impl.interface.exitRequested()) {
             break;
         }
+
+        down_button.fireInterruptIfNeeded();
 
         if (pic.PC == 0x002788) {
             std.debug.print("DELAY\n", .{});
             pic.PC = 0x0027bc; // Skip over delays, ugly hack because the timer takes FOR EVA
         }
 
-        if (pic.PC == 0x1f120) {
-            // hangs on EEprom stuff
-            std.debug.print("SKIP _modify_rolling_code_and_radio_proto\n", .{});
-            pic.PC = 0x1f198;
-        }
+        // if (pic.PC == 0x1f120) {
+        //     // hangs on EEprom stuff
+        //     std.debug.print("SKIP generate_remote_serial\n", .{});
+        //     pic.PC = 0x1f198;
+        // }
 
         if (pic.PC == 0x00395c) {
             // hangs waiting for radio status
@@ -125,7 +132,7 @@ pub fn main(init: std.process.Init) !void {
         }
 
         if (idx == 1100000_000) {
-            pic.PC = 0x01c5d2;
+            // pic.PC = 0x01c5d2;
         }
 
         if (pic.PC == 0x1e12) {
