@@ -82,7 +82,7 @@ pub const PICTimer0 = struct {
                 if (pic.REGS.INTCON.GIE == 1 and pic.REGS.INTCON.TMR0IE == 1) {
                     // std.debug.print("Timer0 FIRED!!!!!!!! INTCON = {}\n", .{pic.REGS.INTCON});
                     pic.REGS.INTCON.TMR0IF = 1;
-                   
+                    pic.handleInterrupt();
                 }
             }
         }
