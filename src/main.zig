@@ -3,6 +3,7 @@ const gpio = @import("gpio.zig");
 
 const PIC18 = @import("pic18.zig").PIC18;
 const spi_flash = @import("spi_flash.zig");
+const spi_si4455_radio = @import("spi_si4455_radio.zig");
 const IL9341_display = @import("ili9341_display.zig");
 const RaylibUI = @import("raylib_ui.zig").RaylibUI;
 const gpio_button = @import("gpio_button.zig");
@@ -42,6 +43,11 @@ pub fn main(init: std.process.Init) !void {
     var data_flash = spi_flash.SPIFlash.init(pic, flash_data);
     pic.MSSP2.slave = &data_flash.spiSlaveInterface;
     pic.GPIOPortA.pins[5] = &data_flash.csPinInterface;
+
+    var radio = spi_si4455_radio.SPISi4455Radio.init(pic);
+
+    pic.MSSP1.slave = &radio.spiSlaveInterface;
+    pic.GPIOPortD.pins[3] = &radio.csPinInterface;
 
     var ui_impl = try RaylibUI.init(allocator);
     defer ui_impl.deinit();
@@ -83,22 +89,22 @@ pub fn main(init: std.process.Init) !void {
 
         down_button.fireInterruptIfNeeded();
 
-        if (pic.PC == 0x002788) {
-            std.debug.print("DELAY\n", .{});
-            pic.PC = 0x0027bc; // Skip over delays, ugly hack because the timer takes FOR EVA
-        }
+        // if (pic.PC == 0x002788) {
+        //     std.debug.print("DELAY\n", .{});
+        //     pic.PC = 0x0027bc; // Skip over delays, ugly hack because the timer takes FOR EVA
+        // }
 
         // if (pic.PC == 0x1f120) {
-        //     // hangs on EEprom stuff
+        //     // hangs waiting for button press
         //     std.debug.print("SKIP generate_remote_serial\n", .{});
         //     pic.PC = 0x1f198;
         // }
 
-        if (pic.PC == 0x00395c) {
-            // hangs waiting for radio status
-            std.debug.print("SKIP Si4455_ReinitAndRx\n", .{});
-            pic.PC = 0x0084a;
-        }
+        // if (pic.PC == 0x00395c) {
+        //     // hangs waiting for radio status
+        //     std.debug.print("SKIP Si4455_ReinitAndRx\n", .{});
+        //     pic.PC = 0x0084a;
+        // }
 
         if (pic.PC == 0x0038cc) {
             // hangs on adc read
@@ -106,10 +112,10 @@ pub fn main(init: std.process.Init) !void {
             pic.PC = 0x0038e2;
         }
 
-        if (pic.PC == 0x00102c) {
-            std.debug.print("SKIP Radio_ReceiveData\n", .{});
-            pic.PC = 0x001084;
-        }
+        // if (pic.PC == 0x00102c) {
+        //     std.debug.print("SKIP Radio_ReceiveData\n", .{});
+        //     pic.PC = 0x001084;
+        // }
         if (pic.PC == 0x01a296) {
             // Skip SerialCommand_Handler
             // std.debug.print("skip SerialCommand_Handler", .{});
@@ -126,10 +132,10 @@ pub fn main(init: std.process.Init) !void {
             // pic.printStackTrace();
         }
 
-        if (pic.PC == 0x01d90a) {
-            std.debug.print("LCD_DrawSprite\n", .{});
-            pic.printStackTrace();
-        }
+        // if (pic.PC == 0x01d90a) {
+        //     std.debug.print("LCD_DrawSprite\n", .{});
+        //     pic.printStackTrace();
+        // }
 
         if (idx == 1100000_000) {
             // pic.PC = 0x01c5d2;
