@@ -5,6 +5,7 @@ const PICGPIOPort = @import("pic_gpio_port.zig").PICGPIOPort;
 const PICMSSP = @import("pic_mssp.zig").PICMSSP;
 const PICTimer0 = @import("pic_timer0.zig").PICTimer0;
 const PICEeprom = @import("pic_eeprom.zig").PICEeprom;
+const PICRTCC = @import("pic_rtcc.zig").PICRTCC;
 const readInt = std.mem.readInt;
 
 pub const PeripheralError = error{
@@ -174,6 +175,7 @@ pub const PIC18 = struct {
     MSSP2: PICMSSP,
     Timer0: PICTimer0,
     Eeprom: PICEeprom,
+    RTCC: PICRTCC,
 
     pub fn init(allocator: std.mem.Allocator) *PIC18 {
         // Allocate full 2Mbyte program memory space
@@ -253,6 +255,7 @@ pub const PIC18 = struct {
         pic.GPIOPortF = PICGPIOPort.init();
         pic.GPIOPortG = PICGPIOPort.init();
         pic.Eeprom = PICEeprom.init();
+        pic.RTCC = PICRTCC.init();
 
         pic.SFRHandlers[0xF80 - 0xF00] = &pic.GPIOPortA.PORT_REG_HANDLER;
         pic.SFRHandlers[0xF92 - 0xF00] = &pic.GPIOPortA.TRIS_REG_HANDLER;
@@ -302,6 +305,11 @@ pub const PIC18 = struct {
         // ...but it turns out it is not a p18f67k22 we are emulating
         // so EECON1 is at 0x0FA6
         pic.SFRHandlers[0x0FA6 - 0xF00] = &pic.Eeprom.EECON1_REG_HANDLER;
+
+        pic.SFRHandlers[0x0F5F - 0xF00] = &pic.RTCC.RTCCFG_REG_HANDLER;
+
+        pic.SFRHandlers[0x0F5C - 0xF00] = &pic.RTCC.RTCVALL_REG_HANDLER;
+        pic.SFRHandlers[0x0F5D - 0xF00] = &pic.RTCC.RTCVALH_REG_HANDLER;
 
         // Reset SFR handlers
         for (pic.SFRHandlers, 0..) |handler, offset| {
@@ -527,6 +535,7 @@ pub const PIC18 = struct {
 
     pub fn execInstruction(self: *PIC18) !void {
         self.Timer0.tick(self);
+        self.RTCC.tick(self);
         const instruction = self.consumeProgWord();
 
         errdefer {
