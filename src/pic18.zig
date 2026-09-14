@@ -13,6 +13,13 @@ pub const PeripheralError = error{
     WriteProhibited,
 };
 
+// Describes a function to display it's name in stack traces
+pub const FunctionDescriptor = struct {
+    name: []u8,
+    start: u21,
+    end: u21,
+};
+
 // Interface to a register belonging to some peripheral
 pub const SpecialFunctionRegisterHandler = struct {
     const VTable = struct {
@@ -176,6 +183,8 @@ pub const PIC18 = struct {
     Timer0: PICTimer0,
     Eeprom: PICEeprom,
     RTCC: PICRTCC,
+
+    function_info: std.json.Parsed([]FunctionDescriptor),
 
     pub fn init(allocator: std.mem.Allocator) *PIC18 {
         // Allocate full 2Mbyte program memory space
@@ -1279,14 +1288,32 @@ pub const PIC18 = struct {
                 std.debug.print("  == OVERFLOW\n", .{});
                 continue;
             }
-            std.debug.print("  0x{x}\n", .{self.STACK[i]});
+            std.debug.print("  0x{x} [{s}]\n", .{ self.STACK[i], self.functionNameAtAddr(self.STACK[i]) });
         }
-        std.debug.print("  0x{x}  [PC]\n", .{self.PC});
+        std.debug.print("  0x{x} [{s}] [PC]\n", .{ self.PC, self.functionNameAtAddr(self.PC) });
     }
+
+    pub fn functionNameAtAddr(self: *PIC18, addr: u21) []u8 {
+        for (self.function_info.value) |descr| {
+            if (addr >= descr.start and addr < descr.end) {
+                return descr.name;
+            }
+        }
+        return "";
+    }
+
+    pub fn loadFunctionsList(self: *PIC18, reader: *std.Io.Reader) !void {
+        var json_reader = std.json.Reader.init(self.allocator, reader);
+        defer json_reader.deinit();
+
+        self.function_info = try std.json.parseFromTokenSource([]FunctionDescriptor, self.allocator, &json_reader, .{});
+    }
+
     pub fn deinit(self: *PIC18) void {
         self.allocator.free(self.MEM);
         self.allocator.free(self.PROG);
         self.allocator.free(self.configuration_bytes);
+        self.function_info.deinit();
         self.allocator.destroy(self); // Does this make sense?
     }
 };

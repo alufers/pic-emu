@@ -29,6 +29,14 @@ pub fn main(init: std.process.Init) !void {
     defer pic.deinit();
     try pic.loadRom(&rdr.interface);
 
+    var addrs_file = try std.Io.Dir.cwd().openFile(init.io, "./addrs.json", .{ .mode = .read_only });
+    defer addrs_file.close(init.io);
+
+    var addrs_file_buffer: [1024]u8 = undefined;
+    var addrs_rdr = addrs_file.reader(init.io, &addrs_file_buffer);
+
+    try pic.loadFunctionsList(&addrs_rdr.interface);
+
     // var spi_cs_pin = gpio.LoggingGPIOPin.init("A.5 [FLASH_CS]");
 
     var flash_file = try std.Io.Dir.cwd().openFile(init.io, "./flash.bin", .{ .mode = .read_only });

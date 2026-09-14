@@ -71,8 +71,8 @@ pub const SPISi4455Radio = struct {
                         return 0x00;
                     },
                     else => {
-                        std.debug.print("[RADIO] UNKNOWN RADIO COMMAND: 0x{x}\n", .{in});
-                        self.pic.printStackTrace();
+                        // std.debug.print("[RADIO] UNKNOWN RADIO COMMAND: 0x{x}\n", .{in});
+                        // self.pic.printStackTrace();
                     },
                 }
             },
