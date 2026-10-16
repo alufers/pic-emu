@@ -5,7 +5,6 @@ const PIC18 = pic18.PIC18;
 const PeripheralError = pic18.PeripheralError;
 
 /// Implements a rudimentary EEPROM peripheral
-/// For now it just returns FREE=1 in EECON1 so that code waiting for that bit passes through
 pub const PICEeprom = struct {
     const Self = @This();
 

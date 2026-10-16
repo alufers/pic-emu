@@ -97,6 +97,8 @@ pub const PICRTCC = struct {
     fn rtccfgWrite(handler: *SpecialFunctionRegisterHandler, pic: *PIC18, _: u16, value: u8) PeripheralError!void {
         var self: *Self = @alignCast(@fieldParentPtr("RTCCFG_REG_HANDLER", handler));
 
+        _ = pic;
+
         const writeMask: u8 = @bitCast(if (self.rtccfg.RTCWREN == 1) RTCCFG{
             .RTCWREN = 1,
             .RTCEN = 1,
@@ -118,9 +120,9 @@ pub const PICRTCC = struct {
         const origValue = @as(u8, @bitCast(self.rtccfg)) & (~@as(u8, @bitCast(writeMask)));
 
         self.rtccfg = @bitCast((value & writeMask) | origValue);
-        std.debug.print("RTCC RTCCFG write 0x{}\n", .{self.rtccfg});
+        // std.debug.print("RTCC RTCCFG write 0x{}\n", .{self.rtccfg});
 
-        pic.printStackTrace();
+        // pic.printStackTrace();
     }
 
     fn rtcvalhRead(handler: *SpecialFunctionRegisterHandler, _: *PIC18, _: u16) PeripheralError!u8 {

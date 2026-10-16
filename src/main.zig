@@ -114,30 +114,33 @@ pub fn main(init: std.process.Init) !void {
         //     pic.PC = 0x0084a;
         // }
 
-        if (pic.PC == 0x0038cc) {
-            // hangs on adc read
-            std.debug.print("SKIP ADC_READ\n", .{});
-            pic.PC = 0x0038e2;
-        }
-
         // if (pic.PC == 0x00102c) {
         //     std.debug.print("SKIP Radio_ReceiveData\n", .{});
         //     pic.PC = 0x001084;
         // }
-        if (pic.PC == 0x01a296) {
-            // Skip SerialCommand_Handler
-            // std.debug.print("skip SerialCommand_Handler", .{});
-            pic.PC = 0x01a2d8;
-        }
+        // if (pic.PC == 0x01a296) {
+        //     // Skip SerialCommand_Handler
+        //     // std.debug.print("skip SerialCommand_Handler", .{});
+        //     pic.PC = 0x01a2d8;
+        // }
 
         if (pic.PC == 0x000d02) {
+            // print drawn icons
             std.debug.print("ICON ID = {}\n", .{pic.REGS.WREG.*});
         }
 
         if (pic.PC == 0x013ac4) {
             const text_addr = std.mem.readInt(u16, pic.MEM[0x3c .. 0x3c + 2], .little);
-            std.debug.print("LCD_draw_text: {s}\n", .{pic.MEM[text_addr .. text_addr + 109]});
-            // pic.printStackTrace();
+
+            std.debug.print("LCD_draw_text: {s}\n", .{std.mem.sliceTo(pic.MEM[text_addr..][0..109], 0)});
+
+            pic.printStackTrace();
+
+            // std.debug.print("FLASH_TABLE_OFFSET = {x}", .{std.mem.readInt(u32, pic.MEM[0x3d1..][0..4], .little)});
+        }
+
+        if (pic.PC == 0x016830) {
+            std.debug.print("!!!!!!!!!!!!!!!!! REACHED FUN_CODE_016830\n", .{});
         }
 
         // if (pic.PC == 0x01d90a) {
@@ -145,9 +148,7 @@ pub fn main(init: std.process.Init) !void {
         //     pic.printStackTrace();
         // }
 
-        if (idx == 1100000_000) {
-            // pic.PC = 0x01c5d2;
-        }
+       
 
         if (pic.PC == 0x1e12) {
             pic.enableTrace = true;

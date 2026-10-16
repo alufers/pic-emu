@@ -180,6 +180,9 @@ pub const SPIFlash = struct {
                 self.paramIdx += 1;
                 if (self.paramIdx == 3) {
                     std.debug.print("[FLASH] SECTOR_ERASE addr=0x{x}\n", .{self.addr});
+                    self.pic.printStackTrace();
+
+                    @memset(self.flashBuf[self.addr..][0..4096], 0xFF);
                     self.state = .idle;
                 }
             },
@@ -197,6 +200,7 @@ pub const SPIFlash = struct {
                 }
             },
             .aai_word_program_data => {
+                self.flashBuf[self.addr] = in;
                 self.addr += 1;
                 // TODO: implement
             },

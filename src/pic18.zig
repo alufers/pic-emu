@@ -6,6 +6,7 @@ const PICMSSP = @import("pic_mssp.zig").PICMSSP;
 const PICTimer0 = @import("pic_timer0.zig").PICTimer0;
 const PICEeprom = @import("pic_eeprom.zig").PICEeprom;
 const PICRTCC = @import("pic_rtcc.zig").PICRTCC;
+const PICAdc = @import("pic_adc.zig").PICAdc;
 const readInt = std.mem.readInt;
 
 pub const PeripheralError = error{
@@ -161,14 +162,13 @@ pub const PIC18 = struct {
     // Registers
     PC: u21,
     REGS: RegAddrs,
-    STACK: [31]u21, // 31 levels of hardware stack
+    STACK: [31]u21,
 
     WREG_SHADOW: u8,
     STATUS_SHADOW: StatusReg,
     BSR_SHADOW: u8,
 
-    /// Maps to memory addresses from 0xF00 to 0xFFF,
-    /// If Some, read/write to this register is handled by the vtable, otherwise it is direct memory access
+    /// Handlers for memory-mapped peripherals
     SFRHandlers: [256]?*SpecialFunctionRegisterHandler,
 
     GPIOPortA: PICGPIOPort,
@@ -183,8 +183,9 @@ pub const PIC18 = struct {
     Timer0: PICTimer0,
     Eeprom: PICEeprom,
     RTCC: PICRTCC,
+    ADC: PICAdc,
 
-    function_info: std.json.Parsed([]FunctionDescriptor),
+    function_info: ?std.json.Parsed([]FunctionDescriptor),
 
     pub fn init(allocator: std.mem.Allocator) *PIC18 {
         // Allocate full 2Mbyte program memory space
@@ -266,6 +267,8 @@ pub const PIC18 = struct {
         pic.Eeprom = PICEeprom.init();
         pic.RTCC = PICRTCC.init();
 
+        pic.ADC = PICAdc.init();
+
         pic.SFRHandlers[0xF80 - 0xF00] = &pic.GPIOPortA.PORT_REG_HANDLER;
         pic.SFRHandlers[0xF92 - 0xF00] = &pic.GPIOPortA.TRIS_REG_HANDLER;
         pic.SFRHandlers[0xF89 - 0xF00] = &pic.GPIOPortA.LAT_REG_HANDLER;
@@ -316,9 +319,13 @@ pub const PIC18 = struct {
         pic.SFRHandlers[0x0FA6 - 0xF00] = &pic.Eeprom.EECON1_REG_HANDLER;
 
         pic.SFRHandlers[0x0F5F - 0xF00] = &pic.RTCC.RTCCFG_REG_HANDLER;
-
         pic.SFRHandlers[0x0F5C - 0xF00] = &pic.RTCC.RTCVALL_REG_HANDLER;
         pic.SFRHandlers[0x0F5D - 0xF00] = &pic.RTCC.RTCVALH_REG_HANDLER;
+
+        // Adc
+        pic.SFRHandlers[0x0FC2 - 0xF00] = &pic.ADC.ADCON0_REG_HANDLER;
+        pic.SFRHandlers[0x0FC3 - 0xF00] = &pic.ADC.ADRESL_REG_HANDLER;
+        pic.SFRHandlers[0x0FC4 - 0xF00] = &pic.ADC.ADRESH_REG_HANDLER;
 
         // Reset SFR handlers
         for (pic.SFRHandlers, 0..) |handler, offset| {
@@ -328,7 +335,7 @@ pub const PIC18 = struct {
         }
 
         pic.enableTrace = false;
-
+        pic.function_info = null;
         return pic;
     }
 
@@ -375,21 +382,10 @@ pub const PIC18 = struct {
             const bank: u16 = self.REGS.BSR.*;
             return bank * 256 + addr;
         }
-        // The Access Bank consists of the first 96 bytes of
-        // memory (00h-5Fh) in Bank 0 and the last 160 bytes of
-        // memory (60h-FFh) in Bank 15. The lower half is known
-        // as the "Access RAM" and is composed of GPRs. The
-        // upper half is where the device's SFRs are mapped.
-        // These two areas are mapped contiguously in the
-        // Access Bank and can be addressed in a linear fashion
-        // by an eight-bit address
         const bank: u16 = if (addr < 96) 0 else 15;
         return bank * 256 + addr;
     }
 
-    // Checks whether the access is done via indirect addressing (using the FSR registers),
-    // and acts accordingly
-    // Otheriwse returns the address as-is
     fn resolveIndirect(self: *PIC18, full_addr: u16) !u16 {
         if (full_addr >= self.MEM.len) {
             return error.OutOfBoundsMemoryAccess;
@@ -545,6 +541,7 @@ pub const PIC18 = struct {
     pub fn execInstruction(self: *PIC18) !void {
         self.Timer0.tick(self);
         self.RTCC.tick(self);
+        self.ADC.tick(self);
         const instruction = self.consumeProgWord();
 
         errdefer {
@@ -1294,11 +1291,14 @@ pub const PIC18 = struct {
     }
 
     pub fn functionNameAtAddr(self: *PIC18, addr: u21) []u8 {
-        for (self.function_info.value) |descr| {
-            if (addr >= descr.start and addr < descr.end) {
-                return descr.name;
+        if (self.function_info) |func_info| {
+            for (func_info.value) |descr| {
+                if (addr >= descr.start and addr < descr.end) {
+                    return descr.name;
+                }
             }
         }
+
         return "";
     }
 
@@ -1313,7 +1313,10 @@ pub const PIC18 = struct {
         self.allocator.free(self.MEM);
         self.allocator.free(self.PROG);
         self.allocator.free(self.configuration_bytes);
-        self.function_info.deinit();
+        if (self.function_info) |func_info| {
+            func_info.deinit();
+        }
+
         self.allocator.destroy(self); // Does this make sense?
     }
 };
