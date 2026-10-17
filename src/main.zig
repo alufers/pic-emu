@@ -94,7 +94,7 @@ pub fn main(init: std.process.Init) !void {
         if (ui_impl.interface.exitRequested()) {
             break;
         }
-
+        _ = idx;
         down_button.fireInterruptIfNeeded();
 
         // if (pic.PC == 0x002788) {
@@ -147,8 +147,6 @@ pub fn main(init: std.process.Init) !void {
         //     std.debug.print("LCD_DrawSprite\n", .{});
         //     pic.printStackTrace();
         // }
-
-       
 
         if (pic.PC == 0x1e12) {
             pic.enableTrace = true;

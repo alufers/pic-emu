@@ -44,6 +44,7 @@ pub const SpecialFunctionRegisterHandler = struct {
 };
 
 pub const PIC18 = struct {
+    const Self = @This();
     /// https://onlinedocs.microchip.com/oxy/GUID-0C48BD90-048C-4F4F-9800-5D5269497C89-en-US-3/GUID-06A816BE-05BC-452E-AE33-7D4FD59DE5FD.html#GUID-06A816BE-05BC-452E-AE33-7D4FD59DE5FD
     const StatusReg = packed struct {
         /// Carry
@@ -133,6 +134,9 @@ pub const PIC18 = struct {
         PREINC2: *u8,
         PLUSW2: *u8,
 
+        PCLATH: *u8,
+        PCLATU: *u8,
+
         /// Bank select register
         BSR: *u8,
 
@@ -184,6 +188,12 @@ pub const PIC18 = struct {
     Eeprom: PICEeprom,
     RTCC: PICRTCC,
     ADC: PICAdc,
+
+    TOSL_REG_HANDLER: SpecialFunctionRegisterHandler,
+    TOSH_REG_HANDLER: SpecialFunctionRegisterHandler,
+    TOSU_REG_HANDLER: SpecialFunctionRegisterHandler,
+
+    PCL_REG_HANDLER: SpecialFunctionRegisterHandler,
 
     function_info: ?std.json.Parsed([]FunctionDescriptor),
 
@@ -252,6 +262,9 @@ pub const PIC18 = struct {
             .EEADR = @ptrCast(&mem[0x0F62]),
             .EEADRH = @ptrCast(&mem[0x0F63]),
             .EEDATA = @ptrCast(&mem[0x0F61]),
+
+            .PCLATH = @ptrCast(&mem[0x0FFA]),
+            .PCLATU = @ptrCast(&mem[0x0FFB]),
         };
 
         pic.MSSP1 = PICMSSP.init(1);
@@ -326,6 +339,39 @@ pub const PIC18 = struct {
         pic.SFRHandlers[0x0FC2 - 0xF00] = &pic.ADC.ADCON0_REG_HANDLER;
         pic.SFRHandlers[0x0FC3 - 0xF00] = &pic.ADC.ADRESL_REG_HANDLER;
         pic.SFRHandlers[0x0FC4 - 0xF00] = &pic.ADC.ADRESH_REG_HANDLER;
+
+        // TOS
+        pic.TOSL_REG_HANDLER = .{
+            .vtable = &.{
+                .read = onTosLRead,
+                .write = onTosLWrite,
+            },
+        };
+        pic.TOSH_REG_HANDLER = .{
+            .vtable = &.{
+                .read = onTosHRead,
+                .write = onTosHWrite,
+            },
+        };
+        pic.TOSU_REG_HANDLER = .{
+            .vtable = &.{
+                .read = onTosURead,
+                .write = onTosUWrite,
+            },
+        };
+        pic.SFRHandlers[0x0FFD - 0xF00] = &pic.TOSL_REG_HANDLER;
+        pic.SFRHandlers[0x0FFE - 0xF00] = &pic.TOSH_REG_HANDLER;
+        pic.SFRHandlers[0x0FFF - 0xF00] = &pic.TOSU_REG_HANDLER;
+
+        // PCL
+
+        pic.PCL_REG_HANDLER = .{
+            .vtable = &.{
+                .read = onPclRead,
+                .write = onPclWrite,
+            },
+        };
+        pic.SFRHandlers[0x0FF9 - 0xF00] = &pic.PCL_REG_HANDLER;
 
         // Reset SFR handlers
         for (pic.SFRHandlers, 0..) |handler, offset| {
@@ -559,7 +605,7 @@ pub const PIC18 = struct {
                     0b0000 => {
                         switch (nibble3) {
                             0b0000 => {
-                                if (nibble4 == 0b000) {
+                                if (nibble4 == 0b0000) {
                                     self.printInstruction(instruction, "NOP\n", .{});
                                 } else if (nibble4 == 0b0100) {
                                     self.printInstruction(instruction, "CLRWDT\n", .{});
@@ -567,7 +613,7 @@ pub const PIC18 = struct {
                                     self.REGS.STATUS.*.TO = 1;
                                     self.REGS.STATUS.*.PD = 1;
                                     // TODO: implement watchdog timer
-                                } else if (nibble4 & 0b1100 != 0) { // TBLRD - Table read
+                                } else if (nibble4 & 0b1100 == 0b1000) { // TBLRD - Table read
                                     // supposedly the third nibble is 0000, but for some reason it is allowed to be non-zero
                                     const mm = instruction & 0x0003;
 
@@ -588,6 +634,10 @@ pub const PIC18 = struct {
                                     self.REGS.TBLPTRU.* = @intCast((tblptr >> 16) & 0x0F);
                                     self.REGS.TBLPTRH.* = @intCast((tblptr >> 8) & 0xFF);
                                     self.REGS.TBLPTRL.* = @intCast(tblptr & 0xFF);
+                                } else if (nibble4 == 0b0101) { // PUSH Push PC+2 onto Return Stack
+                                    try self.check(self.REGS.STKPTR.* < self.STACK.len, "stack overflow not implemented", .{}); // TODO: implement stack overflow handling
+                                    self.STACK[self.REGS.STKPTR.*] = self.PC;
+                                    self.REGS.STKPTR.* += 1;
                                 } else {
                                     return error.InvalidInstruction;
                                 }
@@ -1307,6 +1357,36 @@ pub const PIC18 = struct {
         defer json_reader.deinit();
 
         self.function_info = try std.json.parseFromTokenSource([]FunctionDescriptor, self.allocator, &json_reader, .{});
+    }
+
+    fn onTosLRead(_: *SpecialFunctionRegisterHandler, self: *PIC18, _: u16) PeripheralError!u8 {
+        return @intCast(self.STACK[self.REGS.STKPTR.* - 1] & 0xFF);
+    }
+    fn onTosHRead(_: *SpecialFunctionRegisterHandler, self: *PIC18, _: u16) PeripheralError!u8 {
+        return @intCast((self.STACK[self.REGS.STKPTR.* - 1] >> 8) & 0xFF);
+    }
+    fn onTosURead(_: *SpecialFunctionRegisterHandler, self: *PIC18, _: u16) PeripheralError!u8 {
+        return @intCast((self.STACK[self.REGS.STKPTR.* - 1] >> 16) & 0x0F);
+    }
+
+    fn onTosLWrite(_: *SpecialFunctionRegisterHandler, self: *PIC18, _: u16, value: u8) PeripheralError!void {
+        self.STACK[self.REGS.STKPTR.* - 1] = (self.STACK[self.REGS.STKPTR.* - 1] & 0x1FFF00) | @as(u21, @intCast(value));
+    }
+    fn onTosHWrite(_: *SpecialFunctionRegisterHandler, self: *PIC18, _: u16, value: u8) PeripheralError!void {
+        self.STACK[self.REGS.STKPTR.* - 1] = (self.STACK[self.REGS.STKPTR.* - 1] & 0x1F00FF) | (@as(u21, @intCast(value)) << 8);
+    }
+    fn onTosUWrite(_: *SpecialFunctionRegisterHandler, self: *PIC18, _: u16, value: u8) PeripheralError!void {
+        self.STACK[self.REGS.STKPTR.* - 1] = (self.STACK[self.REGS.STKPTR.* - 1] & 0x00FFFF) | (@as(u21, @intCast(value)) << 16);
+    }
+
+    fn onPclRead(_: *SpecialFunctionRegisterHandler, self: *PIC18, _: u16) PeripheralError!u8 {
+        self.REGS.PCLATH.* = @intCast((self.PC >> 8) & 0xFF);
+        self.REGS.PCLATU.* = @intCast((self.PC >> 16) & 0x0F);
+        return @intCast(self.PC & 0xFF);
+    }
+
+    fn onPclWrite(_: *SpecialFunctionRegisterHandler, self: *PIC18, _: u16, value: u8) PeripheralError!void {
+        self.PC = (@as(u21, @intCast(self.REGS.PCLATU.*)) << 16) | (@as(u21, @intCast(self.REGS.PCLATH.*)) << 8) | @as(u21, @intCast(value & 0xFF));
     }
 
     pub fn deinit(self: *PIC18) void {

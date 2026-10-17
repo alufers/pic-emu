@@ -118,3 +118,30 @@ test "can skip over two word instructions" {
 
     // Status Affected: None
 }
+
+test "computed goto works" {
+    var pic = try asm2emu(
+        \\      MOVF 2, W
+        \\      CALL table
+        \\      ORG 0100h
+        \\table:
+        \\      ADDWF PCL
+        \\      RETLW 21h
+        \\      RETLW 22h
+        \\      RETLW 23h
+        \\      RETLW 25h
+        \\  END
+    );
+    defer pic.deinit();
+
+    pic.MEM[0x02] = 0x04; // Each RETLW is 2 bytes wide, we expect RETLW 23h to execute
+
+    try pic.execInstruction(); // MOVF
+    try pic.execInstruction(); // CALL table
+    try pic.execInstruction(); // ADDWF
+    try pic.execInstruction(); // RETLW
+
+    try std.testing.expectEqual(0x23, pic.REGS.WREG.*);
+
+    // Status Affected: None
+}

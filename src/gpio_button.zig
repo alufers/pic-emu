@@ -28,7 +28,7 @@ pub const GPIOButton = struct {
 
     pub fn fireInterruptIfNeeded(self: *Self) void {
         if (self.ui_iface.isKeyPressed(self.key)) {
-            std.debug.print("[BUTTON] FIRING ISR", .{});
+            std.debug.print("[BUTTON] FIRING ISR\n", .{});
             self.pic.handleInterrupt();
         }
     }
