@@ -76,8 +76,19 @@ pub fn main(init: std.process.Init) !void {
 
     // Buttons
     var down_button = gpio_button.GPIOButton.init(pic, &ui_impl.interface, .down);
-
+    var up_button = gpio_button.GPIOButton.init(pic, &ui_impl.interface, .up);
+    var left_button = gpio_button.GPIOButton.init(pic, &ui_impl.interface, .left);
+    var right_button = gpio_button.GPIOButton.init(pic, &ui_impl.interface, .right);
+    var one_button = gpio_button.GPIOButton.init(pic, &ui_impl.interface, .one);
+    var two_button = gpio_button.GPIOButton.init(pic, &ui_impl.interface, .two);
+    var three_button = gpio_button.GPIOButton.init(pic, &ui_impl.interface, .three);
     pic.GPIOPortF.pins[1] = &down_button.pinInterface;
+    // pic.GPIOPortF.pins[7] = &up_button.pinInterface;
+    // pic.GPIOPortF.pins[2] = &left_button.pinInterface;
+    // pic.GPIOPortF.pins[3] = &right_button.pinInterface;
+    // pic.GPIOPortF.pins[4] = &one_button.pinInterface;
+    // pic.GPIOPortF.pins[5] = &two_button.pinInterface;
+    // pic.GPIOPortF.pins[6] = &three_button.pinInterface;
 
     // for (0..5000) |_| {
     //     pic.execInstruction() catch {
@@ -96,6 +107,13 @@ pub fn main(init: std.process.Init) !void {
         }
         _ = idx;
         down_button.fireInterruptIfNeeded();
+        down_button.fireInterruptIfNeeded();
+        up_button.fireInterruptIfNeeded();
+        left_button.fireInterruptIfNeeded();
+        right_button.fireInterruptIfNeeded();
+        one_button.fireInterruptIfNeeded();
+        two_button.fireInterruptIfNeeded();
+        three_button.fireInterruptIfNeeded();
 
         // if (pic.PC == 0x002788) {
         //     std.debug.print("DELAY\n", .{});

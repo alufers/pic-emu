@@ -9,7 +9,7 @@ pub const RaylibUI = struct {
     pub const HEIGHT = 320;
     const SCALE = 1;
 
-    const KEY_COUNT = @typeInfo(ui.Key).@"enum".fields.len;
+    const KEY_COUNT = @typeInfo(ui.Key).@"enum".field_names.len;
 
     interface: ui.UI,
     allocator: std.mem.Allocator,
@@ -44,8 +44,8 @@ pub const RaylibUI = struct {
             .framebuffer = std.mem.zeroes([WIDTH][HEIGHT]u16),
             .exitFlag = std.atomic.Value(bool).init(false),
             .userExit = std.atomic.Value(bool).init(false),
-            .keyDown = [_]std.atomic.Value(bool){std.atomic.Value(bool).init(false)} ** KEY_COUNT,
-            .keyPressLatch = [_]std.atomic.Value(bool){std.atomic.Value(bool).init(false)} ** KEY_COUNT,
+            .keyDown = @splat(std.atomic.Value(bool).init(false)),
+            .keyPressLatch = @splat(std.atomic.Value(bool).init(false)),
         };
 
         self.thread = try std.Thread.spawn(.{}, Self.drawThread, .{self});
@@ -96,13 +96,13 @@ pub const RaylibUI = struct {
     /// the latch so subsequent polls see false until the next press.
     fn onIsKeyPressed(iface: *ui.UI, key: ui.Key) bool {
         const self: *Self = @alignCast(@fieldParentPtr("interface", iface));
-        return self.keyPressLatch[@intFromEnum(key)].swap(false, .acquire);
+        return self.keyPressLatch[@backingInt(key)].swap(false, .acquire);
     }
 
     /// Level: whether the key is currently held down.
     fn onIsKeyDown(iface: *ui.UI, key: ui.Key) bool {
         const self: *Self = @alignCast(@fieldParentPtr("interface", iface));
-        return self.keyDown[@intFromEnum(key)].load(.acquire);
+        return self.keyDown[@backingInt(key)].load(.acquire);
     }
 
     fn mapKey(key: ui.Key) rl.KeyboardKey {
@@ -171,11 +171,11 @@ pub const RaylibUI = struct {
 
             // Refresh key state for the emulator thread to poll: level state
             // for isKeyDown, plus latch fresh presses for isKeyPressed.
-            inline for (std.meta.fields(ui.Key)) |field| {
-                const key: ui.Key = @enumFromInt(field.value);
-                self.keyDown[field.value].store(rl.isKeyDown(mapKey(key)), .release);
+            inline for (@typeInfo(ui.Key).@"enum".field_values) |val| {
+                const key: ui.Key = @fromBackingInt(@intCast(val));
+                self.keyDown[val].store(rl.isKeyDown(mapKey(key)), .release);
                 if (rl.isKeyPressed(mapKey(key))) {
-                    self.keyPressLatch[field.value].store(true, .release);
+                    self.keyPressLatch[val].store(true, .release);
                 }
             }
         }
